@@ -1,0 +1,16 @@
+# Zeilenenden vereinheitlichen: Im Repository LF, in der Arbeitskopie CRLF.
+# Ohne diese Regel warnt git unter Windows bei jeder Datei.
+* text=auto eol=crlf
+
+# Binärdateien dürfen nie "normalisiert" werden – ein Zeilenumbruch-Bug in
+# einem Screenshot wäre sonst kaum zu finden.
+*.png binary
+*.jpg binary
+*.gif binary
+*.pdf binary
+*.exe binary
+
+# Batch-Dateien laufen nur mit CRLF unter Windows.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

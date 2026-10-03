@@ -1,0 +1,9 @@
+# Kern-Abhängigkeiten des PC-Bedieners
+pyautogui>=0.9.54      # Maus + Tastatur + Screenshot (Modul B & C)
+pillow>=10.0.0          # Bildbearbeitung / Screenshot-Encoding (Modul C)
+psutil>=5.9.0           # Prozesse + System-Status (Modul B & C)
+pywin32>=306            # Fenstermanagement unter Windows (Modul B)
+mcp>=1.2.0              # MCP-SDK für die KI-Schnittstelle
+
+# Tests
+pytest>=8.0.0

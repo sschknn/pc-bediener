@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pc-bediener"
+version = "0.1.0"
+description = "Lokale PC-Steuerung für eine KI über MCP: Code-Ausführung, GUI, Vision, Dateisystem"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "pyautogui>=0.9.54",
+    "pillow>=10.0.0",
+    "psutil>=5.9.0",
+    "pywin32>=306; sys_platform == 'win32'",
+    "mcp>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+pc-bediener = "pcbediener.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

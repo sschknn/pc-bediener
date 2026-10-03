@@ -1,0 +1,597 @@
+"""MCP-Server: stellt die vier Kern-Module als Tools für die KI bereit.
+
+Start (stdio-Transport, so nutzt OpenCode lokale MCP-Server)::
+
+    python -m pcbediener serve
+
+Die Tools sind nach den Modulen A-D aus der Aufgabenstellung benannt:
+``exec_*`` (A), Maus/Tastatur/Fenster/Prozess (B), ``screenshot``/``system_status``
+(C), ``file_*`` (D) sowie die Steuerwerkzeuge ``safety_*``.
+"""
+
+from __future__ import annotations
+
+import functools
+import time
+from typing import Any, Callable
+
+from mcp.server.mcpserver import Image, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ToolAnnotations
+
+from . import __version__, runtime
+from .modules import exec as mod_exec
+from .modules import files as mod_files
+from .modules import gui as mod_gui
+from .modules import proc as mod_proc
+from .modules import vision as mod_vision
+from .safety import ConfirmationRequired, ForbiddenCommand, PathNotAllowed, SafetyError, require_confirm
+
+INSTRUCTIONS = """\
+Du steuerst den lokalen Windows-PC über diese Werkzeuge.
+
+Arbeitsweise:
+1. Zerlege die Aufgabe in klare Teilschritte und plane sie, bevor du handelst.
+2. Nutze Tastatur-Shortcuts, wenn ein Dialog erreichbar ist – sie sind
+   zuverlässiger als Klicks. Für Klicks: erst screenshot(), dann Koordinaten
+   bestimmen; oder screen_find_image() mit einem Bild des Elements.
+3. Warte nach Starts/Klicks mit screen_wait_for_image() oder sleep(), statt
+   zu raten, ob eine Oberfläche schon geladen ist.
+4. Liest du stderr/stdout aus einem exec_*-Aufruf, analysiere die Fehlermeldung,
+   korrigiere den Code und führe ihn erneut aus.
+
+Sicherheit:
+- Destruktive Aktionen (exec_*, file_delete, file_write, file_move, process_kill,
+  process_start, mouse_click) verlangen confirm=True, solange safety_mode
+  "confirm" ist. Die Sperrliste in safety.py gilt immer, auch bei "auto".
+- Dateizugriffe sind auf die Pfade in safety_status() begrenzt.
+- Erkläre in einem kurzen Satz, was eine riskante Aktion bewirken würde, bevor
+  du confirm=True setzt.
+"""
+
+#: Wiederverwendbare Annotations für die Tool-Metadaten.
+READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
+WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
+DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False)
+NO_SIDE_EFFECTS = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
+
+#: Einheitlicher Text für alle ``confirm``-Parameter.
+CONFIRM_DOC = (
+    "Bei safety_mode='confirm' zwingend True, damit die Aktion ausgeführt wird. "
+    "Vorher in einem kurzen Satz erklären, was passiert."
+)
+
+
+def guard(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Macht erwartete Fehler zu lesbaren Tool-Fehlern statt zu Abstürzen.
+
+    Ohne diesen Wrapper würde der MCP-Server bei jedem kleinen Fehler nur
+    "Error executing tool X" melden und den Traceback verstecken – die KI könnte
+    den Fehler dann nicht selbst korrigieren.
+    """
+    expected = (
+        SafetyError,
+        OSError,  # FileNotFoundError, PermissionError, IsADirectoryError, ...
+        ValueError,
+        RuntimeError,
+        NotImplementedError,
+    )
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except expected as exc:
+            message = str(exc) or type(exc).__name__
+            raise ToolError(f"{type(exc).__name__}: {message}") from None
+
+    return wrapper
+
+
+server = MCPServer(
+    name="pc-bediener",
+    title="PC-Bediener (lokale KI-Steuerung)",
+    version=__version__,
+    instructions=INSTRUCTIONS,
+)
+
+
+# ===========================================================================
+# Sicherheitssteuerung
+# ===========================================================================
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description="Zeigt den aktuellen Sicherheitsmodus, erlaubte Pfade und Konfigurationspfad.",
+)
+@guard
+def safety_status() -> dict[str, Any]:
+    return runtime.describe()
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Schaltet den Sicherheitsmodus um: 'confirm' = destruktive Aktionen brauchen "
+        "confirm=True (Standard), 'auto' = die KI handelt vollautonom. Die gesperrten "
+        "Befehlsmuster gelten in beiden Modi."
+    ),
+)
+@guard
+def safety_mode(mode: str) -> dict[str, Any]:
+    if mode not in ("confirm", "auto"):
+        raise ValueError("mode muss 'confirm' oder 'auto' sein")
+    runtime.set_safety_mode(mode)
+    return {"safety_mode": mode, **runtime.describe()}
+
+
+# ===========================================================================
+# Modul A – Code-Ausführung
+# ===========================================================================
+
+
+@server.tool(
+    annotations=DESTRUCTIVE,
+    description=(
+        "Modul A: Führt Python-Code im lokalen Interpreter aus und liefert "
+        "stdout, stderr, Exit-Code und Dauer. Bei Fehlern: stderr analysieren, "
+        "Code korrigieren, erneut ausführen."
+    ),
+)
+@guard
+def exec_python(code: str, confirm: bool = False, timeout: int | None = None) -> dict[str, Any]:
+    return mod_exec.run_python(code, runtime.get_config(), timeout, confirm).to_dict()
+
+
+@server.tool(
+    annotations=DESTRUCTIVE,
+    description="Modul A: Führt ein PowerShell-Skript aus und liefert stdout/stderr/Exit-Code.",
+)
+@guard
+def exec_powershell(
+    script: str, confirm: bool = False, timeout: int | None = None
+) -> dict[str, Any]:
+    return mod_exec.run_powershell(script, runtime.get_config(), timeout, confirm).to_dict()
+
+
+@server.tool(
+    annotations=DESTRUCTIVE,
+    description=(
+        "Modul A: Führt einen Shell-Befehl aus. 'shell' erzwingt den Interpreter "
+        "(powershell, pwsh, cmd, bash, sh); Standard ist unter Windows PowerShell."
+    ),
+)
+@guard
+def exec_command(
+    command: str,
+    shell: str | None = None,
+    confirm: bool = False,
+    timeout: int | None = None,
+) -> dict[str, Any]:
+    return mod_exec.run_command(command, runtime.get_config(), timeout, confirm, shell).to_dict()
+
+
+# ===========================================================================
+# Modul B – Maus
+# ===========================================================================
+
+
+@server.tool(
+    annotations=NO_SIDE_EFFECTS,
+    description=(
+        "Modul B: Bewegt die Maus auf (x, y). 'duration' animiert die Bewegung "
+        "(nützlich bei Drag & Drop). Koordinaten kommen aus screenshot()."
+    ),
+)
+@guard
+def mouse_move(x: int, y: int, duration: float = 0.0) -> dict[str, Any]:
+    return mod_gui.move_mouse(x, y, runtime.get_config(), duration)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Klickt mit der Maus. Ohne x/y wird an der aktuellen Position "
+        "geklickt. button: left|right|middle, clicks: 1-5."
+    ),
+)
+@guard
+def mouse_click(
+    x: int | None = None,
+    y: int | None = None,
+    button: str = "left",
+    clicks: int = 1,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    return mod_gui.click(x, y, runtime.get_config(), button, clicks, confirm=confirm)
+
+
+@server.tool(
+    annotations=WRITE,
+    description="Modul B: Zieht von (x1, y1) nach (x2, y2) – für Drag & Drop.",
+)
+@guard
+def mouse_drag(
+    x1: int, y1: int, x2: int, y2: int, button: str = "left", duration: float = 0.5
+) -> dict[str, Any]:
+    return mod_gui.drag(x1, y1, x2, y2, runtime.get_config(), duration, button)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Scrollt. Positive clicks scrollen nach oben (bzw. rechts bei "
+        "horizontal=True). Optional erst an (x, y) bewegen."
+    ),
+)
+@guard
+def mouse_scroll(
+    clicks: int, x: int | None = None, y: int | None = None, horizontal: bool = False
+) -> dict[str, Any]:
+    return mod_gui.scroll(clicks, x, y, horizontal, runtime.get_config())
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Modul B: Bildschirmauflösung, Mausposition und Bildschirm-Hauptauflösung "
+        "für Multi-Monitor-Setups."
+    ),
+)
+@guard
+def screen_info() -> dict[str, Any]:
+    return {**mod_gui.screen_size(), "mouse": mod_gui.mouse_position()}
+
+
+# ===========================================================================
+# Modul B – Tastatur
+# ===========================================================================
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Tippt Text. Bei Sonderzeichen use_clipboard=True verwenden – "
+        "das ist zuverlässiger als Tastendrücke für Unicode."
+    ),
+)
+@guard
+def keyboard_type(text: str, use_clipboard: bool = False, interval: float = 0.0) -> dict[str, Any]:
+    return mod_gui.type_text(text, runtime.get_config(), interval, use_clipboard)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Drückt eine Taste, z.B. 'enter', 'esc', 'f5', 'tab', 'space', "
+        "'printscreen'. Mehrfachdrücke über 'presses'."
+    ),
+)
+@guard
+def keyboard_press(key: str, presses: int = 1) -> dict[str, Any]:
+    return mod_gui.press_key(key, presses, runtime.get_config())
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Führt einen Hotkey aus, z.B. ['ctrl','c'], ['alt','tab'], "
+        "['win','shift','s']. Tasten werden in dieser Reihenfolge gedrückt."
+    ),
+)
+@guard
+def keyboard_hotkey(keys: list[str]) -> dict[str, Any]:
+    return mod_gui.hotkey(*keys, cfg=runtime.get_config())
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description="Modul B: Wartet Sekunden – um UI-Animationen und Programmstarts abzuwarten.",
+)
+@guard
+def sleep(seconds: float) -> dict[str, Any]:
+    if seconds < 0 or seconds > 60:
+        raise ValueError("seconds muss zwischen 0 und 60 liegen")
+    time.sleep(seconds)
+    return {"slept_s": seconds}
+
+
+# ===========================================================================
+# Modul B – Fenster
+# ===========================================================================
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Modul B: Listet offene Fenster mit Titel, Position, Größe und minimized/"
+        "maximized. filter_text ist ein Teilstring-Filter (leer = alle)."
+    ),
+)
+@guard
+def window_list(filter_text: str = "") -> dict[str, Any]:
+    return mod_gui.list_windows(filter_text)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Aktiviert ein Fenster anhand seines Titels und holt es aus "
+        "minimiertem Zustand zurück. Der wichtigste Test für zuverlässige GUI-Steuerung."
+    ),
+)
+@guard
+def window_focus(title: str, exact: bool = False) -> dict[str, Any]:
+    return mod_gui.focus_window(title, exact)
+
+
+@server.tool(
+    annotations=DESTRUCTIVE,
+    description=(
+        "Modul B: Fensteraktion – 'minimize', 'maximize', 'restore', 'hide' oder "
+        "'close'. 'close' beendet die Anwendung und braucht confirm=True."
+    ),
+)
+@guard
+def window_action(
+    title: str, action: str, exact: bool = False, confirm: bool = False
+) -> dict[str, Any]:
+    cfg = runtime.get_config()
+    if action == "close":
+        require_confirm(confirm, cfg, "Fenster schließen (Anwendung beenden)", title)
+    return mod_gui.window_action(title, action, exact)
+
+
+# ===========================================================================
+# Modul B – Prozesse
+# ===========================================================================
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Modul B: Listet laufende Prozesse mit CPU/RAM. "
+        "sort_by: cpu|memory|name|pid."
+    ),
+)
+@guard
+def process_list(
+    filter_text: str = "", limit: int = 30, sort_by: str = "cpu"
+) -> dict[str, Any]:
+    return mod_proc.list_processes(runtime.get_config(), filter_text, limit, sort_by)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description="Modul B: Details zu einem Prozess (CPU, RAM, Pfad, Kommandozeile, Startzeit).",
+)
+@guard
+def process_info(pid: int) -> dict[str, Any]:
+    return mod_proc.process_info(pid)
+
+
+@server.tool(
+    annotations=DESTRUCTIVE,
+    description=(
+        "Modul B: Startet ein Programm, z.B. 'notepad' oder ein Pfad zur .exe. "
+        "background=True startet es entkoppelt und wartet nicht."
+    ),
+)
+@guard
+def process_start(
+    program: str,
+    arguments: list[str] | None = None,
+    background: bool = True,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    return mod_proc.start_process(program, runtime.get_config(), background, arguments, confirm)
+
+
+@server.tool(
+    annotations=DESTRUCTIVE,
+    description=(
+        "Modul B: Beendet einen Prozess. Systemprozesse und der eigene Prozess sind "
+        "geschützt. force=True erzwingt das Beenden (SIGKILL-Äquivalent)."
+    ),
+)
+@guard
+def process_kill(pid: int, force: bool = False, confirm: bool = False) -> dict[str, Any]:
+    return mod_proc.kill_process(pid, runtime.get_config(), force, confirm)
+
+
+# ===========================================================================
+# Modul C – Vision & Systemstatus
+# ===========================================================================
+
+
+@server.tool(
+    annotations=NO_SIDE_EFFECTS,
+    description=(
+        "Modul C: Nimmt einen Screenshot auf und liefert ihn als Bild zurück – "
+        "damit Oberflächen visuell analysiert und Klickpositionen bestimmt werden können. "
+        "region=(links, oben, breite, hoehe) für einen Ausschnitt; max_width skaliert "
+        "runter, um Tokens zu sparen."
+    ),
+)
+@guard
+def screenshot(
+    region: tuple[int, int, int, int] | None = None,
+    path: str | None = None,
+    save: bool = True,
+    max_width: int = 0,
+) -> list[Image | dict[str, Any]]:
+    cfg = runtime.get_config()
+    meta = mod_vision.screenshot(cfg, path, region, save, max_width)
+    if not meta.get("path"):
+        return [meta]
+    return [Image(path=meta["path"]), meta]
+
+
+@server.tool(
+    annotations=NO_SIDE_EFFECTS,
+    description=(
+        "Modul C: Sucht ein Bild auf dem Bildschirm und liefert dessen Position. "
+        "Damit klickt die KI auf ein Element, ohne die Koordinate zu schätzen."
+    ),
+)
+@guard
+def screen_find_image(
+    image_path: str, region: tuple[int, int, int, int] | None = None
+) -> dict[str, Any]:
+    return mod_vision.find_on_screen(runtime.get_config(), image_path, region)
+
+
+@server.tool(
+    annotations=NO_SIDE_EFFECTS,
+    description=(
+        "Modul C: Wartet bis zu timeout_s Sekunden darauf, dass ein Bild auf dem "
+        "Bildschirm erscheint. Nützlich nach Programmstarts oder Klicks."
+    ),
+)
+@guard
+def screen_wait_for_image(
+    image_path: str, timeout_s: float = 10.0, poll_interval: float = 0.5
+) -> dict[str, Any]:
+    return mod_vision.wait_for_image(runtime.get_config(), image_path, timeout_s, poll_interval)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Modul C: Systemstatus – CPU (inkl. pro Kern), RAM, Festplatte, Akku, "
+        "Uptime, Sicherheitsmodus."
+    ),
+)
+@guard
+def system_status(include_disk: bool = True, disk_path: str | None = None) -> dict[str, Any]:
+    return mod_vision.system_status(runtime.get_config(), include_disk, disk_path)
+
+
+# ===========================================================================
+# Modul D – Dateisystem
+# ===========================================================================
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Modul D: Liest eine Textdatei und liefert Inhalt plus Metadaten. "
+        "Für Binärdateien read_binary nutzen (liefert Base64)."
+    ),
+)
+@guard
+def file_read(path: str, max_chars: int = 200_000) -> dict[str, Any]:
+    return mod_files.read_text(path, runtime.get_config(), max_chars)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description="Modul D: Liest eine Binärdatei und liefert sie Base64-kodiert.",
+)
+@guard
+def file_read_binary(path: str, max_bytes: int = 5_000_000) -> dict[str, Any]:
+    return mod_files.read_binary(path, runtime.get_config(), max_bytes)
+
+
+@server.tool(
+    annotations=DESTRUCTIVE,
+    description=(
+        "Modul D: Schreibt eine Textdatei (überschreibt sie). Braucht confirm=True, "
+        "solange safety_mode='confirm' gilt. append=True hängt an, ohne Bestätigung."
+    ),
+)
+@guard
+def file_write(
+    path: str, content: str, append: bool = False, confirm: bool = False
+) -> dict[str, Any]:
+    return mod_files.write_text(path, content, runtime.get_config(), append, True, confirm)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description="Modul D: Listet den Inhalt eines Ordners. pattern filtert (z.B. '*.py').",
+)
+@guard
+def file_list(path: str, pattern: str = "*", recursive: bool = False) -> dict[str, Any]:
+    return mod_files.list_dir(path, runtime.get_config(), pattern, recursive)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Modul D: Kompakte Baumansicht eines Ordners (max. 3 Ebenen) – liest sich "
+        "für die KI schneller als eine flache Liste."
+    ),
+)
+@guard
+def file_tree(path: str, max_depth: int = 3) -> dict[str, Any]:
+    return mod_files.tree(path, runtime.get_config(), max_depth=max_depth)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description="Modul D: Sucht rekursiv nach Dateien/Ordnern mit Depth-Begrenzung.",
+)
+@guard
+def file_search(
+    path: str,
+    pattern: str = "*",
+    filter_glob: str | None = None,
+    max_results: int = 200,
+    max_depth: int = 8,
+) -> dict[str, Any]:
+    return mod_files.search(
+        path, runtime.get_config(), pattern, filter_glob, max_results, max_depth
+    )
+
+
+@server.tool(
+    annotations=NO_SIDE_EFFECTS,
+    description="Modul D: Legt einen Ordner an (inklusive Elternordner).",
+)
+@guard
+def folder_create(path: str) -> dict[str, Any]:
+    return mod_files.make_dir(path, runtime.get_config())
+
+
+@server.tool(
+    annotations=DESTRUCTIVE,
+    description=(
+        "Modul D: Verschiebt oder benennt eine Datei/einen Ordner um. "
+        "Braucht confirm=True bei safety_mode='confirm'."
+    ),
+)
+@guard
+def file_move(src: str, dst: str, confirm: bool = False, overwrite: bool = False) -> dict[str, Any]:
+    return mod_files.move(src, dst, runtime.get_config(), confirm, overwrite)
+
+
+@server.tool(
+    annotations=WRITE,
+    description="Modul D: Kopiert eine Datei oder einen Ordner (rekursiv).",
+)
+@guard
+def file_copy(src: str, dst: str, overwrite: bool = False) -> dict[str, Any]:
+    return mod_files.copy(src, dst, runtime.get_config(), overwrite)
+
+
+@server.tool(
+    annotations=DESTRUCTIVE,
+    description=(
+        "Modul D: Löscht eine Datei oder einen Ordner. Braucht confirm=True. "
+        "Nicht-leere Ordner nur mit recursive=True."
+    ),
+)
+@guard
+def file_delete(path: str, recursive: bool = False, confirm: bool = False) -> dict[str, Any]:
+    return mod_files.delete(path, runtime.get_config(), recursive, confirm)
+
+
+def main() -> None:
+    """Startet den Server auf stdio."""
+    server.run("stdio")
+
+
+if __name__ == "__main__":
+    main()

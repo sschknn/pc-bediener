@@ -186,7 +186,7 @@ selbst enthalten keine eigenen Prüfungen.
 ```
 
 ```
-146 passed
+152 passed
 ```
 
 Abgedeckt sind Konfiguration, Sperrliste, Pfadgrenzen, alle vier Module,
@@ -194,6 +194,17 @@ die MCP-Schemas und – wichtig – ein echter **stdio-Handshake**: Der Test
 startet `python -m pcbediener serve` als Subprozess und ruft Tools über das
 MCP-Protokoll auf. GUI- und Vision-Tests verwenden eine Attrappe statt
 `pyautogui`, damit sie nie den echten Desktop beeinflussen.
+
+Zwei Regressionstests sind besonders lehrreich:
+
+- `test_all_pywin32_attributes_exist` prüft **jedes** verwendete
+  `win32gui`/`win32con`/`win32process`-Attribut statisch. pywin32 verteilt seine
+  Funktionen auf mehrere Module (`GetWindowThreadProcessId` liegt in
+  `win32process`, `GetCurrentThreadId` in `win32api`, `IsZoomed` gibt es nur
+  über `ctypes`) – solche Fehler fallen sonst erst zur Laufzeit auf.
+- `test_list_windows_finds_what_win32_sees` vergleicht `window_list()` direkt
+  mit einer rohen `EnumWindows`-Zählung, damit ein verschluckter Fehler nicht
+  als „es gibt keine Fenster" durchgeht.
 
 ## Hinweise
 

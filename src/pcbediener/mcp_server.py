@@ -20,6 +20,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from . import __version__, runtime
+from .modules import appmemory as mod_appmem
 from .modules import exec as mod_exec
 from .modules import files as mod_files
 from .modules import flstudio as mod_flstudio
@@ -48,7 +49,13 @@ Arbeitsweise:
    PrintWindow-Composite – letzteres ignoriert die Z-Reihenfolge.
 7. Pfade und Sonderzeichen immer per clipboard_set() + Strg+V eingeben
    (keyboard_type mit use_clipboard=True nutzt das automatisch).
-8. FL-Studio-Wissen (Fensterklassen, Shortcuts, Rezepte) liefert flstudio_info().
+ 8. Für Bild-/Screenshot-Analyse: Subagent mit opencode/space-bunny-free
+    (primär). Hängt oder scheitert es, Fallback: opencode/fledge-alpha-free.
+    Das Programm-Gedächtnis (appmem_*) und flstudio_info() liefern Kontext.
+9. Programm-Gedächtnis (appmem_*): Vor jeder App-Bedienung die Regel lesen
+   (app_rule_get), danach Ergebnis verifizieren und Regeldatei AKTUALISIEREN
+   (app_rule_set bei Erfolg, app_rule_break bei Fehlschlag). Nur verifizierte
+   Wege benutzen – nie wiederholen, was unter avoid/broken steht.
 
 Sicherheit:
 - Destruktive Aktionen (exec_*, file_delete, file_write, file_move, process_kill,
@@ -134,6 +141,30 @@ def safety_mode(mode: str) -> dict[str, Any]:
         raise ValueError("mode muss 'confirm' oder 'auto' sein")
     runtime.set_safety_mode(mode)
     return {"safety_mode": mode, **runtime.describe()}
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description="Zeigt das aktive Vision-Modell-Routing (Primär/Fallback).",
+)
+@guard
+def vision_model() -> dict[str, Any]:
+    cfg = runtime.get_config()
+    return {"primary": cfg.vision_primary, "fallback": cfg.vision_fallback}
+
+
+@server.tool(
+    annotations=WRITE,
+    description="Ändert das Vision-Modell-Routing (primär/Fallback).",
+)
+@guard
+def vision_set(primary: str | None = None, fallback: str | None = None) -> dict[str, Any]:
+    cfg = runtime.get_config()
+    if primary:
+        cfg.vision_primary = primary
+    if fallback:
+        cfg.vision_fallback = fallback
+    return {"primary": cfg.vision_primary, "fallback": cfg.vision_fallback}
 
 
 # ===========================================================================
@@ -558,6 +589,58 @@ def window_menu(title: str, path: str, exact: bool = False) -> dict[str, Any]:
 @guard
 def window_key_shortcut(title: str, keys: str, exact: bool = False) -> dict[str, Any]:
     return mod_bg.key_shortcut(title, keys)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Programm-Gedächtnis: Listet alle Regeln + Avoid-Liste einer App "
+        "(Status, broken-Flag, Kurznotiz). Startpunkt jeder App-Automation."
+    ),
+)
+@guard
+def app_rules_list(app: str) -> dict[str, Any]:
+    mod_appmem.ensure_seeded(app)
+    return mod_appmem.list_rules(app)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Programm-Gedächtnis: Holt EINEN verifizierten Bedienweg (Schritte + "
+        "Notiz + Status). Fehlende/defekte Regel = KeyError, dann erst einen "
+        "Weg verifizieren und per app_rule_set speichern."
+    ),
+)
+@guard
+def app_rule_get(app: str, name: str) -> dict[str, Any]:
+    mod_appmem.ensure_seeded(app)
+    return mod_appmem.get_rule(app, name)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Programm-Gedächtnis: Speichert einen VERIFIZIERTEN Weg (Erfolg per "
+        "Screenshot/OCR/Pixel belegt). Löst broken-Flag, zählt verified_ok hoch."
+    ),
+)
+@guard
+def app_rule_set(app: str, name: str, steps: list[str], note: str = "") -> dict[str, Any]:
+    return mod_appmem.set_rule(app, name, steps, note)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Programm-Gedächtnis: Markiert einen Weg AUTOMATISCH bei Fehlschlag als "
+        "defekt (mit Grund + optionalem Ersatz). Defekte Regeln werden nicht "
+        "mehr benutzt, bis app_rule_set sie erneut verifiziert."
+    ),
+)
+@guard
+def app_rule_break(app: str, name: str, reason: str, replacement: str = "") -> dict[str, Any]:
+    return mod_appmem.mark_broken(app, name, reason, replacement)
 
 
 # ===========================================================================

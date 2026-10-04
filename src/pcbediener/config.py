@@ -72,6 +72,12 @@ class Config:
     # --- Meta ------------------------------------------------------------
     source_path: str = ""
 
+    # --- Vision-Modell-Routing -------------------------------------------
+    # Primärmodell für Bild-/Screenshot-Analyse (free); Fallback, wenn das
+    # Primärmodell nicht liefert (z.B. Rate-Limit, Session hängt).
+    vision_primary: str = "opencode/space-bunny-free"
+    vision_fallback: str = "opencode/fledge-alpha-free"
+
     def __post_init__(self) -> None:
         if not self.screenshot_dir:
             self.screenshot_dir = str(default_screenshot_dir())

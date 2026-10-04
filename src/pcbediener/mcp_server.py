@@ -25,6 +25,7 @@ from .modules import files as mod_files
 from .modules import gui as mod_gui
 from .modules import proc as mod_proc
 from .modules import vision as mod_vision
+from .modules import background as mod_bg
 from .safety import ConfirmationRequired, ForbiddenCommand, PathNotAllowed, SafetyError, require_confirm
 
 INSTRUCTIONS = """\
@@ -192,8 +193,11 @@ def mouse_move(x: int, y: int, duration: float = 0.0) -> dict[str, Any]:
 @server.tool(
     annotations=WRITE,
     description=(
-        "Modul B: Klickt mit der Maus. Ohne x/y wird an der aktuellen Position "
-        "geklickt. button: left|right|middle, clicks: 1-5."
+        "Modul B: Klickt robust – auch bei Programmen, die einfache synthetische "
+        "Klicks ignorieren (z.B. FL Studio). Mit 'window' wird das Zielfenster vorher "
+        "FRISCH aufgelöst und in den Vordergrund+ Fokus gezwungen; danach wird die "
+        "echte Cursor-Position verifiziert und ein blockierter Klick als Fehler "
+        "gemeldet statt still zu scheitern. Gib bei Dialogs immer 'window' an."
     ),
 )
 @guard
@@ -203,8 +207,58 @@ def mouse_click(
     button: str = "left",
     clicks: int = 1,
     confirm: bool = False,
+    window: str | None = None,
+    exact: bool = False,
 ) -> dict[str, Any]:
-    return mod_gui.click(x, y, runtime.get_config(), button, clicks, confirm=confirm)
+    return mod_gui.click(
+        x, y, runtime.get_config(), button, clicks,
+        confirm=confirm, window=window, exact=exact,
+    )
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Zwingt ein Fenster in den Vordergrund und gibt ihm den Tastatur-Fokus "
+        "(AttachThreadInput + SetForegroundWindow). Nötig bei Programmen, die Klicks "
+        "ohne Fokus ignorieren. Liefert zurück, ob es geklappt hat."
+    ),
+)
+@guard
+def window_activate(title: str, exact: bool = False) -> dict[str, Any]:
+    return mod_gui.activate(mod_gui.find_window(title, exact))
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Modul B: Prüft, ob ein Fenster noch existiert und ob es auf synthetische "
+        "Nachrichten antwortet. Erkennt haengende Programme (Message-Pumpe blockiert) "
+        "und veraltete Fenster-Handles – die haeufigste Fehlerursache bei GUI-Automation."
+    ),
+)
+@guard
+def window_health(title: str, exact: bool = False) -> dict[str, Any]:
+    import time as _time
+
+    win32gui, win32con = mod_gui._win32(), mod_gui._win32con()
+    hwnd = mod_gui.find_window(title, exact)
+    start = _time.monotonic()
+    answers = bool(
+        win32gui.SendMessageTimeout(
+            hwnd, win32con.WM_NULL, 0, 0, win32con.SMTO_ABORTIFHUNG, 2000
+        )
+    )
+    return {
+        "hwnd": hwnd,
+        "title": win32gui.GetWindowText(hwnd),
+        "exists": bool(win32gui.IsWindow(hwnd)),
+        "enabled": bool(win32gui.IsWindowEnabled(hwnd)),
+        "visible": bool(win32gui.IsWindowVisible(hwnd)),
+        "foreground": win32gui.GetForegroundWindow() == hwnd,
+        "responds_to_messages": answers,
+        "reply_ms": round((_time.monotonic() - start) * 1000, 1),
+    }
 
 
 @server.tool(
@@ -341,6 +395,74 @@ def window_action(
     if action == "close":
         require_confirm(confirm, cfg, "Fenster schließen (Anwendung beenden)", title)
     return mod_gui.window_action(title, action, exact)
+
+
+# ===========================================================================
+# Modul E – Hintergrund-Steuerung (Fokus-frei, Maus bleibt frei)
+# ===========================================================================
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Modul E: Listet UIA-Controls eines Fensters (Name, Typ, AutomationId). "
+        "Immer dazu nutzen, um Buttons/Edits für window_invoke/window_set_text gefunden zu werden."
+    ),
+)
+@guard
+def window_list_controls(title: str, name_filter: str = "", exact: bool = False) -> dict[str, Any]:
+    return mod_bg.list_controls(title, name_filter, exact)
+
+
+@server.tool(
+    annotations=NO_SIDE_EFFECTS,
+    description=(
+        "Modul E: Setzt den Text eines Fensters (erstes Edit-Control oder über control_name) "
+        "ohne Fokuswechsel und ohne den Mauscursor zu bewegen – der Benutzer kann nebenbei weiterarbeiten. "
+        "Das Dokument wird NICHT automatisch gespeichert: danach window_menu(file) oder "
+        "window_key_shortcut(ctrl+s) auf dasselbe Fenster anwenden."
+    ),
+)
+@guard
+def window_set_text(title: str, text: str, control_name: str | None = None, exact: bool = False) -> dict[str, Any]:
+    return mod_bg.set_text(title, text, control_name, exact)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul E: Klickt anonym ein Control(Name/AutomationId) eines Fensters über UIA "
+        "InvokePattern – ohne Fokuswechsel und ohne den Mauscursor zu bewegen."
+    ),
+)
+@guard
+def window_invoke(title: str, control_name: str, exact: bool = False) -> dict[str, Any]:
+    return mod_bg.invoke_control(title, control_name, exact)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul E: Wählt einen Menüpunkt eines Fensters im Hintergrund, z. B. "
+        "'File -> Save' oder 'Edit -> Copy'."
+    ),
+)
+@guard
+def window_menu(title: str, path: str, exact: bool = False) -> dict[str, Any]:
+    return mod_bg.menu(title, path, exact)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul E: Sendet eine Tastenkombination per PostMessage an ein Fenster "
+        "(z. B. 'ctrl+s'). Funktioniert zuverlässig bei klassischen Win32-Controls; "
+        "bei WinUI-Apps eher window_menu nutzen. Kein Fokuswechsel nötig."
+    ),
+)
+@guard
+def window_key_shortcut(title: str, keys: str, exact: bool = False) -> dict[str, Any]:
+    return mod_bg.key_shortcut(title, keys)
 
 
 # ===========================================================================

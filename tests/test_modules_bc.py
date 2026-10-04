@@ -17,6 +17,7 @@ from pcbediener.modules import gui as mod_gui
 from pcbediener.modules import proc as mod_proc
 from pcbediener.modules import vision as mod_vision
 from pcbediener.safety import ConfirmationRequired
+from conftest import FakePyAutoGUI
 
 
 class TestMouse:
@@ -101,6 +102,63 @@ class TestKeyboard:
     def test_type_rejects_non_string(self, fake_gui):
         with pytest.raises(TypeError):
             mod_gui.type_text(123)  # type: ignore[arg-type]
+
+
+class TestRobustClick:
+    """Regressionen gegen die Fehler, die beim Steuern von FL Studio auftraten."""
+
+    def test_click_with_window_activates_it(self, cfg: Config, fake_gui, monkeypatch):
+        """Ein Klick mit 'window' muss das Fenster vorher in den Vordergrund holen."""
+        class FakeWin32Gui:
+            @staticmethod
+            def IsWindow(h): return True
+            @staticmethod
+            def IsWindowVisible(h): return True
+            @staticmethod
+            def GetWindowText(h): return "Ziel-Fenster"
+            @staticmethod
+            def ShowWindow(h, c): pass
+            @staticmethod
+            def GetForegroundWindow(): return 4242
+            @staticmethod
+            def SetForegroundWindow(h): pass
+            @staticmethod
+            def BringWindowToTop(h): pass
+            @staticmethod
+            def SetActiveWindow(h): pass
+            @staticmethod
+            def EnumWindows(cb, _):
+                cb(4242, None)  # ein Fenster gefunden
+                return None
+
+        monkeypatch.setattr(mod_gui, "_win32", lambda: FakeWin32Gui())
+        monkeypatch.setattr(mod_gui, "_win32con", lambda: type("C", (), {"SW_SHOW": 5}))
+        monkeypatch.setattr(mod_gui, "_win32process", lambda: type("P", (), {})())
+
+        result = mod_gui.click(10, 20, cfg, window="Ziel", confirm=True)
+        assert result["target_window"] == "Ziel"
+        assert result["activation"]["hwnd"] == 4242
+        assert result["activation"]["foreground"] is True
+        assert "click" in fake_gui.names()
+
+    def test_click_reports_blocked_cursor(self, cfg: Config, fake_gui, monkeypatch):
+        """Wenn der Cursor nicht wandert, muss ein klarer Fehler kommen."""
+        import win32api
+
+        monkeypatch.setattr(win32api, "SetCursorPos", lambda pos: None)
+
+        def stuck_position():
+            return (5, 5)  # bleibt immer stehen
+
+        monkeypatch.setattr(fake_gui, "position", stuck_position)
+
+        with pytest.raises(RuntimeError, match="Integritaetsstufe|Cursor"):
+            mod_gui.click(999, 888, cfg, confirm=True)
+
+    def test_click_verifies_cursor_position(self, cfg: Config, fake_gui):
+        """Ohne blockierten Desktop muss die Position exakt stimmen."""
+        result = mod_gui.click(400, 300, cfg, confirm=True)
+        assert result["clicked"] == {"x": 400, "y": 300}
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Fensterzugriff nur unter Windows")

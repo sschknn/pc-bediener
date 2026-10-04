@@ -99,6 +99,67 @@ def move_mouse(x: int, y: int, cfg: Config, duration: float = 0.0) -> dict[str, 
     return {"moved_to": {"x": int(x), "y": int(y)}}
 
 
+def activate(hwnd: int) -> dict[str, Any]:
+    """Zwingt ein Fenster in den Vordergrund *und* aktiviert es.
+
+    Das ist der entscheidende Schritt, ohne den viele Programme Klicks
+    ignorieren: Windows stellt ``SetForegroundWindow`` zurück, wenn der
+    aufrufende Prozess nicht selbst im Vordergrund war. ``AttachThreadInput``
+    hängt den eigenen Thread kurz an den Fenster-Thread und umgeht diese
+    Sperre. Danach besitzt das Fenster auch den Tastatur-Fokus, den
+    Delphi/VCL-Programme (u.a. FL Studio) für Hover- und Klick-Reaktion
+    brauchen.
+    """
+    win32gui, win32con, win32process = _win32(), _win32con(), _win32process()
+    import win32api
+
+    if not win32gui.IsWindow(hwnd):
+        raise ValueError(f"Fenster-Handle {hwnd} existiert nicht (mehr)")
+
+    win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+
+    already = win32gui.GetForegroundWindow() == hwnd
+    attached = False
+    try:
+        win32gui.SetForegroundWindow(hwnd)
+    except Exception:
+        pass  # häufig blockiert -> AttachThreadInput-Weg unten
+
+    if win32gui.GetForegroundWindow() != hwnd:
+        current = win32api.GetCurrentThreadId()
+        fg = win32gui.GetForegroundWindow()
+        threads = {
+            win32process.GetWindowThreadProcessId(hwnd)[0],
+            win32process.GetWindowThreadProcessId(fg)[0] if fg else 0,
+        }
+        threads.discard(0)
+        try:
+            for thread in threads:
+                win32process.AttachThreadInput(current, thread, True)
+            attached = True
+            win32gui.BringWindowToTop(hwnd)
+            win32gui.SetForegroundWindow(hwnd)
+            try:
+                win32gui.SetActiveWindow(hwnd)
+            except Exception:
+                pass
+        finally:
+            if attached:
+                for thread in threads:
+                    try:
+                        win32process.AttachThreadInput(current, thread, False)
+                    except Exception:
+                        pass
+
+    return {
+        "hwnd": hwnd,
+        "title": win32gui.GetWindowText(hwnd),
+        "foreground": win32gui.GetForegroundWindow() == hwnd,
+        "was_already_foreground": already,
+        "thread_input_attached": attached,
+    }
+
+
 def click(
     x: int | None = None,
     y: int | None = None,
@@ -107,30 +168,76 @@ def click(
     clicks: int = 1,
     interval: float = 0.1,
     confirm: bool = False,
+    window: str | None = None,
+    exact: bool = False,
 ) -> dict[str, Any]:
-    """Klickt – optional erst an die Position (x, y) bewegen.
+    """Klickt robust – auch bei Programmen, die synthetische Klicks ignorieren.
 
-    Klicks auf Systemdialoge oder Schaltflächen mit Konsequenz (z.B. "Ja,
-    löschen") sollten im Sicherheitsmodus ``confirm`` bestätigt werden; setze
-    dafür ``confirm=True``.
+    Gegen ``pyautogui.click`` gibt es drei entscheidende Unterschiede:
+
+    1. **Handle frisch auflösen.** Fenster-Handles veralten schnell (FL Studio
+       bekam innerhalb weniger Minuten neue). Deshalb wird ``window`` immer
+       unmittelbar vor dem Klick neu aufgelöst und danach geprüft, ob es noch
+       gültig ist.
+    2. **Vordergrund erzwingen** (:func:`activate`). Viele Programme ignorieren
+       Klicks, wenn ihr Fenster nicht den Fokus hat.
+    3. **Echten Cursor setzen und prüfen.** ``SetCursorPos`` + ``mouse_event``
+       statt nur ``pyautogui.click``; anschließend wird die tatsächliche
+       Cursor-Position verifiziert. Weicht sie ab, blockiert der Desktop die
+       Eingabe (z.B. wegen abweichender Integritätsstufe) – das wird als
+       Fehler gemeldet statt stillschweigend zu scheitern.
+
+    Args:
+        window: Titel des Zielfensters. Vor dem Klick wird es in den
+            Vordergrund geholt. Sehr empfehlenswert für Dialoge.
+        exact: Exakte Titelübereinstimmung statt Teilstring.
     """
-    pg = _pyautogui()
     if button not in ("left", "right", "middle"):
         raise ValueError(f"Unbekannte Maustaste: {button}")
     if clicks < 1 or clicks > 5:
         raise ValueError("clicks muss zwischen 1 und 5 liegen")
 
     if cfg is not None:
-        require_confirm(confirm, cfg, f"{clicks}x {button}-Klick", f"bei ({x}, {y})" if x is not None else "")
-        if x is not None and y is not None:
-            move_mouse(x, y, cfg)
+        require_confirm(
+            confirm, cfg, f"{clicks}x {button}-Klick",
+            f"bei ({x}, {y})" + (f" im Fenster {window!r}" if window else "") if x is not None else "",
+        )
 
-    pg.click(x=x, y=y, button=button, clicks=clicks, interval=interval,
-             duration=0 if cfg is None else cfg.click_delay_ms / 1000)
+    activation: dict[str, Any] | None = None
+    if window:
+        hwnd = find_window(window, exact)          # immer frisch auflösen
+        activation = activate(hwnd)
+
+    pg = _pyautogui()
+    if x is not None and y is not None:
+        # Position hart setzen und danach prüfen, statt zu hoffen.
+        try:
+            import win32api
+
+            win32api.SetCursorPos((int(x), int(y)))
+        except Exception:
+            move_mouse(x, y, cfg) if cfg else pg.moveTo(x, y)
+
+        actual = pg.position()
+        if (int(actual[0]), int(actual[1])) != (int(x), int(y)):
+            raise RuntimeError(
+                f"Cursor liess sich nicht auf ({x}, {y}) setzen – "
+                f"tatsaechlich ({actual[0]}, {actual[1]}). Meist blockiert eine "
+                "abweichende Integritaetsstufe (UIPI) die synthetische Eingabe: "
+                "laeuft der PC-Bediener mit geringeren Rechten als das Zielprogramm?"
+            )
+
+    pg.click(
+        x=x, y=y, button=button, clicks=clicks, interval=interval,
+        duration=0 if cfg is None else cfg.click_delay_ms / 1000,
+    )
+
     return {
         "clicked": {"x": int(pg.position()[0]), "y": int(pg.position()[1])},
         "button": button,
         "clicks": clicks,
+        "target_window": window,
+        "activation": activation,
     }
 
 

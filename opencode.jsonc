@@ -13,5 +13,16 @@
         "cwd": "C:\\Users\\frank\\Documents\\Projekte\\pc bediener"
       }
     }
+  },
+  "addon": {
+    "pcbediener": {
+      "path": "C:\\Users\\frank\\Documents\\Projekte\\pc bediener\\addon\\pcbediener_addon.py",
+      "autoload": true,
+      "version": "1.0.0",
+      "description": "PC-Bediener + FL Studio Addon - Autonome PC-Steuerung und FL Studio Produktion"
+    }
+  },
+  "session": {
+    "prompt": "Du bist der PC-Bediener Producer DJ. Du steuerst den lokalen Windows-PC über pcbediener MCP-Tools und produzierst Tracks in FL Studio. Du bist voll autonom (safety_mode=auto). Bei jeder Aktion: prüfe zuerst safety_status(), führe dann aus, verifiziere das Ergebnis. FL Studio-Wissen ist in flstudio_info() hinterlegt. Arbeite mit Tastatur-Shortcuts vor Maus. Warte nach Programmstarts mit screen_wait_for_image() oder sleep(). Korrigiere Fehler selbst (stderr analysieren, Code anpassen, erneut ausführen)."
   }
 }

@@ -22,6 +22,7 @@ from mcp.types import ToolAnnotations
 from . import __version__, runtime
 from .modules import exec as mod_exec
 from .modules import files as mod_files
+from .modules import flstudio as mod_flstudio
 from .modules import gui as mod_gui
 from .modules import proc as mod_proc
 from .modules import vision as mod_vision
@@ -40,6 +41,14 @@ Arbeitsweise:
    zu raten, ob eine Oberfläche schon geladen ist.
 4. Liest du stderr/stdout aus einem exec_*-Aufruf, analysiere die Fehlermeldung,
    korrigiere den Code und führe ihn erneut aus.
+5. Reagiert ein Fenster nicht mehr (kein Menü öffnet sich): window_modal_state()
+   prüfen – ein modaler Dialog (z.B. Umbenennen/Bestätigen) deaktiviert das
+   Hauptfenster, bis er geschlossen wird.
+6. Für überlappende Fenster (Menüs, Dialoge) gilt nur screenshot(), nie ein
+   PrintWindow-Composite – letzteres ignoriert die Z-Reihenfolge.
+7. Pfade und Sonderzeichen immer per clipboard_set() + Strg+V eingeben
+   (keyboard_type mit use_clipboard=True nutzt das automatisch).
+8. FL-Studio-Wissen (Fensterklassen, Shortcuts, Rezepte) liefert flstudio_info().
 
 Sicherheit:
 - Destruktive Aktionen (exec_*, file_delete, file_write, file_move, process_kill,
@@ -197,7 +206,9 @@ def mouse_move(x: int, y: int, duration: float = 0.0) -> dict[str, Any]:
         "Klicks ignorieren (z.B. FL Studio). Mit 'window' wird das Zielfenster vorher "
         "FRISCH aufgelöst und in den Vordergrund+ Fokus gezwungen; danach wird die "
         "echte Cursor-Position verifiziert und ein blockierter Klick als Fehler "
-        "gemeldet statt still zu scheitern. Gib bei Dialogs immer 'window' an."
+        "gemeldet statt still zu scheitern. Gib bei Dialogs immer 'window' an. "
+        "mode='sendinput' nutzt SendInput auf Hardware-Ebene (PyDirectInput-Art) "
+        "als Fallback; hold_ms hält die Taste gedrückt (für Slider/Regler)."
     ),
 )
 @guard
@@ -209,10 +220,13 @@ def mouse_click(
     confirm: bool = False,
     window: str | None = None,
     exact: bool = False,
+    mode: str = "pyautogui",
+    hold_ms: int = 0,
 ) -> dict[str, Any]:
     return mod_gui.click(
         x, y, runtime.get_config(), button, clicks,
         confirm=confirm, window=window, exact=exact,
+        mode=mode, hold_ms=hold_ms,
     )
 
 
@@ -262,14 +276,73 @@ def window_health(title: str, exact: bool = False) -> dict[str, Any]:
 
 
 @server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Modul B: Diagnose für 'Fenster reagiert nicht'. Meldet, ob das Fenster "
+        "durch einen modalen Dialog blockiert ist (enabled=False + Blockierer "
+        "desselben Threads, z.B. FL Studios TNameEditForm/TMsgForm), inkl. "
+        "GUI-Thread-Status (aktives/fokussiertes Handle). Weiter mit: Blockierer "
+        "per window_action(..., 'close') oder WM_CLOSE schließen."
+    ),
+)
+@guard
+def window_modal_state(title: str, exact: bool = False) -> dict[str, Any]:
+    return mod_gui.modal_state(title, exact)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Anwendungs-Wissen FL Studio: Fensterklassen, Fenster-IDs (widMixer=0, "
+        "widChannelRack=1, widPlaylist=2, ...), Shortcuts (F5 Playlist, F9 Mixer, "
+        "Alt+F8 Browser), MIDI-Scripting-Ablage (device_*.py) und Rezepte "
+        "(Tempo setzen, Audio importieren, Modal-Dialoge)."
+    ),
+)
+@guard
+def flstudio_info() -> dict[str, Any]:
+    return {
+        "window_classes": mod_flstudio.WINDOW_CLASSES,
+        "wid": {
+            "mixer": mod_flstudio.WID_MIXER,
+            "channel_rack": mod_flstudio.WID_CHANNEL_RACK,
+            "playlist": mod_flstudio.WID_PLAYLIST,
+            "piano_roll": mod_flstudio.WID_PIANO_ROLL,
+            "browser": mod_flstudio.WID_BROWSER,
+        },
+        "shortcuts": {
+            "playlist": mod_flstudio.SHORTCUT_PLAYLIST,
+            "channel_rack": mod_flstudio.SHORTCUT_CHANNEL_RACK,
+            "piano_roll": mod_flstudio.SHORTCUT_PIANO_ROLL,
+            "mixer": mod_flstudio.SHORTCUT_MIXER,
+            "browser": mod_flstudio.SHORTCUT_BROWSER,
+        },
+        "midi_scripting": {
+            "hardware_subdir": list(mod_flstudio.HARDWARE_SUBDIR),
+            "device_prefix": mod_flstudio.DEVICE_PREFIX,
+            "api_modules": list(mod_flstudio.API_MODULES),
+        },
+        "toolbar_hints": [
+            {"x": x, "y": y, "hint": hint}
+            for x, y, hint in mod_flstudio.TOOLBAR_HINTS
+        ],
+        "recipes": dict(mod_flstudio.RECIPES),
+    }
+
+
+@server.tool(
     annotations=WRITE,
-    description="Modul B: Zieht von (x1, y1) nach (x2, y2) – für Drag & Drop.",
+    description=(
+        "Modul B: Zieht von (x1, y1) nach (x2, y2) – für Drag & Drop. "
+        "steps>1 fährt in Zwischenpunkten (für Slider, die Sprünge ignorieren)."
+    ),
 )
 @guard
 def mouse_drag(
-    x1: int, y1: int, x2: int, y2: int, button: str = "left", duration: float = 0.5
+    x1: int, y1: int, x2: int, y2: int, button: str = "left", duration: float = 0.5,
+    steps: int = 1,
 ) -> dict[str, Any]:
-    return mod_gui.drag(x1, y1, x2, y2, runtime.get_config(), duration, button)
+    return mod_gui.drag(x1, y1, x2, y2, runtime.get_config(), duration, button, steps)
 
 
 @server.tool(
@@ -337,6 +410,28 @@ def keyboard_press(key: str, presses: int = 1) -> dict[str, Any]:
 @guard
 def keyboard_hotkey(keys: list[str]) -> dict[str, Any]:
     return mod_gui.hotkey(*keys, cfg=runtime.get_config())
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Legt Text in die Zwischenablage (nativ, ohne Zusatzpaket). "
+        "Danach mit keyboard_hotkey(['ctrl','v']) einfügen – zuverlässiger "
+        "als Tippen bei Pfaden und Sonderzeichen."
+    ),
+)
+@guard
+def clipboard_set(text: str) -> dict[str, Any]:
+    return mod_gui.set_clipboard(text)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description="Modul B: Liest den Textinhalt der Zwischenablage.",
+)
+@guard
+def clipboard_get() -> dict[str, Any]:
+    return mod_gui.get_clipboard()
 
 
 @server.tool(

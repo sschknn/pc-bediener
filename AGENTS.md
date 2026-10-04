@@ -46,8 +46,8 @@ engerer Filter oder eine tiefere Suche.
 |---|---|
 | `screen_info()` | Auflösung + Mausposition |
 | `mouse_move(x, y, duration)` | Maus absolut bewegen |
-| `mouse_click(x, y, button, clicks, confirm)` | Klick (button: left/right/middle) |
-| `mouse_drag(x1, y1, x2, y2, button, duration)` | Drag & Drop |
+| `mouse_click(x, y, button, clicks, confirm)` | Klick (button: left/right/middle). `window` holt das Ziel vorher in den Fokus. `mode="sendinput"` nutzt SendInput auf Hardware-Ebene (PyDirectInput-Art), wenn Klicks ignoriert werden. `hold_ms` hält gedrückt (für Slider/Regler). |
+| `mouse_drag(x1, y1, x2, y2, button, duration)` | Drag & Drop. `steps>1` fährt in Zwischenpunkten (für Slider, die Sprünge ignorieren). |
 | `mouse_scroll(clicks, x, y, horizontal)` | Scrollen |
 | `keyboard_type(text, use_clipboard, interval)` | Text tippen |
 | `keyboard_press(key, presses)` | Taste: `enter`, `esc`, `f5`, `tab`, `space`, `printscreen` … |

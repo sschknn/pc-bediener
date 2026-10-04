@@ -8,6 +8,6 @@ D – Dateisystem (:mod:`files`)
 
 from __future__ import annotations
 
-from . import exec, files, gui, proc, vision
+from . import exec, files, flstudio, gui, proc, vision
 
-__all__ = ["exec", "files", "gui", "proc", "vision"]
+__all__ = ["exec", "files", "flstudio", "gui", "proc", "vision"]

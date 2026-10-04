@@ -8,6 +8,7 @@ importierbar bleibt.
 from __future__ import annotations
 
 import ctypes
+import sys
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -160,6 +161,121 @@ def activate(hwnd: int) -> dict[str, Any]:
     }
 
 
+# --- SendInput (PyDirectInput-Technik) -------------------------------------------
+#
+# pyautogui nutzt die veralteten ``mouse_event()``/``keybd_event()`` mit
+# virtuellen Tastencodes – manche Programme (Spiele, DirectX, FL Studio)
+# ignorieren das still. ``SendInput()`` mit absoluten Koordinaten kommt auf
+# Hardware-Ebene an (Vorbild: PyDirectInput von learncodebygaming, MIT).
+# Deshalb gibt es zwei Modi: "pyautogui" (Standard) und "sendinput" (Fallback).
+
+_MOUSEEVENTF_MOVE = 0x0001
+_MOUSEEVENTF_LEFTDOWN = 0x0002
+_MOUSEEVENTF_LEFTUP = 0x0004
+_MOUSEEVENTF_RIGHTDOWN = 0x0008
+_MOUSEEVENTF_RIGHTUP = 0x0010
+_MOUSEEVENTF_MIDDLEDOWN = 0x0020
+_MOUSEEVENTF_MIDDLEUP = 0x0040
+_MOUSEEVENTF_ABSOLUTE = 0x8000
+
+_SENDINPUT_MOUSE = 0
+
+_BUTTON_EVENTS = {
+    "left": (_MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP),
+    "right": (_MOUSEEVENTF_RIGHTDOWN, _MOUSEEVENTF_RIGHTUP),
+    "middle": (_MOUSEEVENTF_MIDDLEDOWN, _MOUSEEVENTF_MIDDLEUP),
+}
+
+_PUL = ctypes.POINTER(ctypes.c_ulong)
+
+
+class _MouseInput(ctypes.Structure):
+    _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong), ("dwExtraInfo", _PUL)]
+
+
+class _InputI(ctypes.Union):
+    _fields_ = [("mi", _MouseInput)]
+
+
+class _Input(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_ulong), ("ii", _InputI)]
+
+
+def _to_windows_coordinates(x: int, y: int, width: int, height: int) -> tuple[int, int]:
+    """Pixel -> normalisierte Absolut-Koordinaten (0..65536, vgl. PyDirectInput)."""
+    return ((int(x) * 65536) // max(1, width) + 1,
+            (int(y) * 65536) // max(1, height) + 1)
+
+
+def _send_mouse_flags(flags: int, dx: int = 0, dy: int = 0) -> int:
+    """Ein SendInput-Maus-Event; gibt die Zahl übernommener Events zurück."""
+    try:
+        send_input = ctypes.windll.user32.SendInput
+    except (AttributeError, OSError) as exc:
+        raise RuntimeError("SendInput nur unter Windows verfügbar") from exc
+    extra = ctypes.c_ulong(0)
+    union = _InputI()
+    union.mi = _MouseInput(dx, dy, 0, flags, 0, ctypes.pointer(extra))
+    packet = _Input(ctypes.c_ulong(_SENDINPUT_MOUSE), union)
+    return int(send_input(1, ctypes.pointer(packet), ctypes.sizeof(packet)))
+
+
+def sendinput_move(x: int, y: int) -> dict[str, Any]:
+    """Bewegt die Maus per SendInput (absolut, Hardware-Ebene)."""
+    try:
+        metrics = ctypes.windll.user32.GetSystemMetrics
+    except (AttributeError, OSError) as exc:
+        raise RuntimeError("SendInput nur unter Windows verfügbar") from exc
+    nx, ny = _to_windows_coordinates(x, y, metrics(0), metrics(1))
+    sent = _send_mouse_flags(_MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE, nx, ny)
+    if sent != 1:
+        raise RuntimeError(
+            "SendInput-Bewegung abgelehnt – Eingabe blockiert "
+            "(abweichende Integritätsstufe/UIPI?)"
+        )
+    return {"moved_to": {"x": int(x), "y": int(y)}, "method": "sendinput"}
+
+
+def sendinput_click(
+    x: int | None = None,
+    y: int | None = None,
+    button: Button = "left",
+    clicks: int = 1,
+    interval: float = 0.1,
+) -> dict[str, Any]:
+    """Klickt per SendInput – Fallback, wenn pyautogui-Klicks ignoriert werden.
+
+    ``SendInput`` meldet zurück, wie viele Events übernommen wurden; wird
+    weniger übernommen als gesendet, scheitert der Aufruf *laut* statt still
+    (der häufigste Grund für „Klick wirkt nicht" bei Spielen/FL Studio).
+    """
+    if button not in _BUTTON_EVENTS:
+        raise ValueError(f"Unbekannte Maustaste: {button}")
+    if clicks < 1 or clicks > 5:
+        raise ValueError("clicks muss zwischen 1 und 5 liegen")
+    if x is not None and y is not None:
+        sendinput_move(x, y)
+    down, up = _BUTTON_EVENTS[button]
+    sent = 0
+    for _ in range(clicks):
+        sent += _send_mouse_flags(down)
+        time.sleep(0.01)
+        sent += _send_mouse_flags(up)
+        if interval:
+            time.sleep(interval)
+    expected = clicks * 2
+    if sent != expected:
+        raise RuntimeError(
+            f"SendInput übernahm {sent}/{expected} Events – Eingabe blockiert "
+            "(abweichende Integritätsstufe/UIPI oder Secure Desktop?)"
+        )
+    pos = {"x": int(x), "y": int(y)} if x is not None and y is not None else mouse_position()
+    return {"clicked": pos, "button": button, "clicks": clicks,
+            "method": "sendinput", "events": sent}
+
+
 def click(
     x: int | None = None,
     y: int | None = None,
@@ -170,6 +286,8 @@ def click(
     confirm: bool = False,
     window: str | None = None,
     exact: bool = False,
+    mode: str = "pyautogui",
+    hold_ms: int = 0,
 ) -> dict[str, Any]:
     """Klickt robust – auch bei Programmen, die synthetische Klicks ignorieren.
 
@@ -191,11 +309,19 @@ def click(
         window: Titel des Zielfensters. Vor dem Klick wird es in den
             Vordergrund geholt. Sehr empfehlenswert für Dialoge.
         exact: Exakte Titelübereinstimmung statt Teilstring.
+        mode: "pyautogui" (Standard) oder "sendinput" (Hardware-Ebene,
+            Fallback nach PyDirectInput-Art, wenn Klicks ignoriert werden).
+        hold_ms: Taste so viele ms gedrückt halten (langsamer Klick, z.B.
+            für FL-Studios Tempo-Slider, die auf Drag statt Klick reagieren).
     """
     if button not in ("left", "right", "middle"):
         raise ValueError(f"Unbekannte Maustaste: {button}")
     if clicks < 1 or clicks > 5:
         raise ValueError("clicks muss zwischen 1 und 5 liegen")
+    if mode not in ("pyautogui", "sendinput"):
+        raise ValueError(f"Unbekannter Klick-Modus {mode!r}: 'pyautogui' oder 'sendinput'")
+    if hold_ms < 0:
+        raise ValueError("hold_ms muss >= 0 sein")
 
     if cfg is not None:
         require_confirm(
@@ -207,6 +333,10 @@ def click(
     if window:
         hwnd = find_window(window, exact)          # immer frisch auflösen
         activation = activate(hwnd)
+
+    if mode == "sendinput":
+        result = sendinput_click(x, y, button, clicks, interval)
+        return {**result, "target_window": window, "activation": activation}
 
     pg = _pyautogui()
     if x is not None and y is not None:
@@ -224,8 +354,26 @@ def click(
                 f"Cursor liess sich nicht auf ({x}, {y}) setzen – "
                 f"tatsaechlich ({actual[0]}, {actual[1]}). Meist blockiert eine "
                 "abweichende Integritaetsstufe (UIPI) die synthetische Eingabe: "
-                "laeuft der PC-Bediener mit geringeren Rechten als das Zielprogramm?"
+                "laeuft der PC-Bediener mit geringeren Rechten als das Zielprogramm? "
+                "Alternative: mode='sendinput'."
             )
+
+    if hold_ms > 0:
+        # Langsamer Klick für Slider/Regler, die kurze Klicks ignorieren.
+        for _ in range(clicks):
+            pg.mouseDown(button=button)
+            time.sleep(hold_ms / 1000)
+            pg.mouseUp(button=button)
+            if interval:
+                time.sleep(interval)
+        return {
+            "clicked": {"x": int(pg.position()[0]), "y": int(pg.position()[1])},
+            "button": button,
+            "clicks": clicks,
+            "hold_ms": hold_ms,
+            "target_window": window,
+            "activation": activation,
+        }
 
     pg.click(
         x=x, y=y, button=button, clicks=clicks, interval=interval,
@@ -258,17 +406,33 @@ def mouse_up(button: Button = "left") -> dict[str, Any]:
 
 def drag(
     x1: int, y1: int, x2: int, y2: int, cfg: Config | None = None,
-    duration: float = 0.5, button: Button = "left",
+    duration: float = 0.5, button: Button = "left", steps: int = 1,
 ) -> dict[str, Any]:
-    """Zieht von (x1, y1) nach (x2, y2)."""
+    """Zieht von (x1, y1) nach (x2, y2).
+
+    ``steps`` > 1 fährt die Strecke in Zwischenpunkten ab (glatter Drag nach
+    AutoHotkey-Art) – manche Slider (z.B. FL-Studio-Regler) werten nur
+    bewegte, gedrückte Maus aus und ignorieren Sprünge.
+    """
+    if steps < 1:
+        raise ValueError("steps muss >= 1 sein")
     pg = _pyautogui()
     pg.moveTo(x1, y1)
     pg.mouseDown(button=button)
     try:
-        pg.moveTo(x2, y2, duration=duration)
+        if steps == 1:
+            pg.moveTo(x2, y2, duration=duration)
+        else:
+            for i in range(1, steps + 1):
+                pg.moveTo(
+                    x1 + (x2 - x1) * i / steps,
+                    y1 + (y2 - y1) * i / steps,
+                    duration=duration / steps,
+                )
     finally:
         pg.mouseUp(button=button)  # auch bei Fehlern loslassen
-    return {"from": {"x": x1, "y": y1}, "to": {"x": x2, "y": y2}, "button": button}
+    return {"from": {"x": x1, "y": y1}, "to": {"x": x2, "y": y2},
+            "button": button, "steps": steps}
 
 
 def scroll(clicks: int, x: int | None = None, y: int | None = None, horizontal: bool = False, cfg: Config | None = None) -> dict[str, Any]:
@@ -300,14 +464,119 @@ def type_text(text: str, cfg: Config | None = None, interval: float = 0.0, use_c
     if use_clipboard or (not text.isascii() and _has_non_ascii(text)):
         try:
             import pyperclip
-        except ImportError as exc:
-            raise RuntimeError("pyperclip fehlt – pip install pyperclip") from exc
-        pyperclip.copy(text)
+        except ImportError:
+            # Kein Zusatzpaket nötig: natives CF_UNICODETEXT (Windows).
+            # pyperclip ist optional – ohne es schlug das hier früher fehl.
+            clipboard_set_native(text)
+        else:
+            pyperclip.copy(text)
         pg.hotkey("ctrl", "v")
         return {"typed_chars": len(text), "method": "clipboard"}
 
     pg.write(text, interval=delay)
     return {"typed_chars": len(text), "method": "keyboard"}
+
+
+def _clipboard_handles():
+    """Win32-Handles mit korrekt gesetzten argtypes.
+
+    Ohne die argtypes liefert ``GlobalLock`` einen beschnittenen Pointer
+    (Access Violation beim Schreiben) – genau dieser Fehler trat beim
+    FL-Studio-Einsatz auf.
+    """
+    from ctypes import wintypes
+
+    u = ctypes.windll.user32
+    k = ctypes.windll.kernel32
+    u.OpenClipboard.argtypes = [wintypes.HWND]
+    u.OpenClipboard.restype = wintypes.BOOL
+    u.EmptyClipboard.restype = wintypes.BOOL
+    u.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    u.SetClipboardData.restype = wintypes.HANDLE
+    u.GetClipboardData.argtypes = [wintypes.UINT]
+    u.GetClipboardData.restype = wintypes.HANDLE
+    k.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    k.GlobalAlloc.restype = wintypes.HANDLE
+    k.GlobalLock.argtypes = [wintypes.HANDLE]
+    k.GlobalLock.restype = wintypes.LPVOID
+    k.GlobalUnlock.argtypes = [wintypes.HANDLE]
+    k.GlobalUnlock.restype = wintypes.BOOL
+    return u, k
+
+
+def clipboard_set_native(text: str) -> dict[str, Any]:
+    """Legt Unicode-Text in die Zwischenablage (Windows, ohne Zusatzpaket)."""
+    if sys.platform != "win32":
+        raise RuntimeError("native Zwischenablage nur unter Windows")
+    if not isinstance(text, str):
+        raise TypeError("text muss ein String sein")
+    u, k = _clipboard_handles()
+    if not u.OpenClipboard(None):
+        raise RuntimeError("OpenClipboard fehlgeschlagen (Clipboard evtl. gesperrt)")
+    try:
+        u.EmptyClipboard()
+        buf = ctypes.create_unicode_buffer(text)
+        size = ctypes.sizeof(buf)
+        h = k.GlobalAlloc(0x0002, size)  # GMEM_MOVEABLE
+        if not h:
+            raise RuntimeError("GlobalAlloc fehlgeschlagen")
+        p = k.GlobalLock(h)
+        if not p:
+            raise RuntimeError("GlobalLock fehlgeschlagen")
+        ctypes.memmove(p, buf, size)
+        k.GlobalUnlock(h)
+        if not u.SetClipboardData(13, h):  # CF_UNICODETEXT
+            raise RuntimeError("SetClipboardData fehlgeschlagen")
+    finally:
+        u.CloseClipboard()
+    return {"ok": True, "chars": len(text)}
+
+
+def clipboard_get_native() -> dict[str, Any]:
+    """Liest Unicode-Text aus der Zwischenablage (Windows, ohne Zusatzpaket)."""
+    if sys.platform != "win32":
+        raise RuntimeError("native Zwischenablage nur unter Windows")
+    u, k = _clipboard_handles()
+    if not u.OpenClipboard(None):
+        raise RuntimeError("OpenClipboard fehlgeschlagen (Clipboard evtl. gesperrt)")
+    try:
+        h = u.GetClipboardData(13)  # CF_UNICODETEXT
+        if not h:
+            return {"ok": True, "text": "", "empty": True}
+        p = k.GlobalLock(h)
+        if not p:
+            raise RuntimeError("GlobalLock fehlgeschlagen")
+        try:
+            text = ctypes.wstring_at(p)
+        finally:
+            k.GlobalUnlock(h)
+    finally:
+        u.CloseClipboard()
+    return {"ok": True, "text": text or "", "chars": len(text or "")}
+
+
+def set_clipboard(text: str) -> dict[str, Any]:
+    """Setzt Clipboard-Text: nativ unter Windows, sonst pyperclip-Fallback."""
+    if sys.platform == "win32":
+        return clipboard_set_native(text)
+    try:
+        import pyperclip
+    except ImportError as exc:
+        raise RuntimeError("pyperclip fehlt – pip install pyperclip") from exc
+    pyperclip.copy(text)
+    return {"ok": True, "chars": len(text), "method": "pyperclip"}
+
+
+def get_clipboard() -> dict[str, Any]:
+    """Liest Clipboard-Text: nativ unter Windows, sonst pyperclip-Fallback."""
+    if sys.platform == "win32":
+        return clipboard_get_native()
+    try:
+        import pyperclip
+    except ImportError as exc:
+        raise RuntimeError("pyperclip fehlt – pip install pyperclip") from exc
+    text = pyperclip.paste() or ""
+    return {"ok": True, "text": text, "chars": len(text), "method": "pyperclip"}
 
 
 def _has_non_ascii(text: str) -> bool:
@@ -556,3 +825,128 @@ def window_action(title: str, action: str, exact: bool = False) -> dict[str, Any
             f"Unbekannte Aktion {action!r}. Möglich: minimize, maximize, restore, hide, close"
         )
     return {**_window_info(hwnd).to_dict(), "action": action}
+
+
+def _gui_thread_info(tid: int) -> dict[str, Any] | None:
+    """Liest GetGUIThreadInfo für einen Thread (aktives/fokussiertes Fenster).
+
+    Das war der entscheidende Befund im FL-Studio-Fall: Das Hauptfenster war
+    deaktiviert (``enabled=False``), weil ein modaler Umbenenn-Dialog
+    (``TNameEditForm``) aktiv war – ohne diese Info rät man ins Leere.
+    """
+    try:
+        u = ctypes.windll.user32
+    except (AttributeError, OSError):
+        return None
+
+    class _Rect(ctypes.Structure):
+        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+    class _Info(ctypes.Structure):
+        _fields_ = [("cbSize", ctypes.c_uint), ("flags", ctypes.c_uint),
+                    ("hwndActive", ctypes.c_void_p), ("hwndFocus", ctypes.c_void_p),
+                    ("hwndCapture", ctypes.c_void_p), ("hwndMenuOwner", ctypes.c_void_p),
+                    ("hwndMoveSize", ctypes.c_void_p), ("hwndCaret", ctypes.c_void_p),
+                    ("rcCaret", _Rect)]
+
+    info = _Info()
+    info.cbSize = ctypes.sizeof(_Info)
+    try:
+        if not u.GetGUIThreadInfo(tid, ctypes.byref(info)):
+            return None
+    except (AttributeError, OSError):
+        return None
+    return {
+        "hwnd_active": int(info.hwndActive or 0),
+        "hwnd_focus": int(info.hwndFocus or 0),
+        "hwnd_capture": int(info.hwndCapture or 0),
+        "hwnd_menu_owner": int(info.hwndMenuOwner or 0),
+    }
+
+
+def modal_state(title: str, exact: bool = False) -> dict[str, Any]:
+    """Diagnose für „Fenster reagiert nicht auf Klicks/Menüs".
+
+    Prüft, ob das Fenster durch einen modalen Dialog blockiert ist:
+    deaktiviertes Hauptfenster + aktives Popup desselben Threads
+    (z.B. FL Studios ``TNameEditForm`` / ``TMsgForm``).
+
+    Liefert den GUI-Thread-Status (aktives/fokussiertes Handle) plus alle
+    sichtbaren Fenster desselben Threads als Blockier-Kandidaten.
+    """
+    win32gui = _win32()
+    hwnd = find_window(title, exact)
+    tid = _win32process().GetWindowThreadProcessId(hwnd)[0]
+
+    thread_windows: list[dict[str, Any]] = []
+
+    def callback(h: int, _param: Any) -> bool:
+        try:
+            if _win32process().GetWindowThreadProcessId(h)[0] != tid:
+                return True
+            if not win32gui.IsWindowVisible(h):
+                return True
+            try:
+                rect = win32gui.GetWindowRect(h)
+            except Exception:
+                rect = (0, 0, 0, 0)
+            try:
+                cls = win32gui.GetClassName(h) or ""
+            except Exception:
+                cls = ""
+            try:
+                text = win32gui.GetWindowText(h) or ""
+            except Exception:
+                text = ""
+            thread_windows.append({
+                "hwnd": h,
+                "title": text,
+                "class_name": cls,
+                "enabled": bool(win32gui.IsWindowEnabled(h)),
+                "rect": list(rect),
+            })
+        except (RuntimeError, ImportError):
+            raise
+        except Exception:
+            pass  # zwischenzeitlich zerstörte Fenster überspringen
+        return True
+
+    win32gui.EnumWindows(callback, None)
+
+    enabled = bool(win32gui.IsWindowEnabled(hwnd))
+    gui = _gui_thread_info(tid)
+    if gui is not None:
+        for key in ("hwnd_active", "hwnd_focus", "hwnd_menu_owner"):
+            h = gui.get(key) or 0
+            if h:
+                try:
+                    gui[key + "_title"] = win32gui.GetWindowText(h) or ""
+                except Exception:
+                    gui[key + "_title"] = ""
+
+    blocker: dict[str, Any] | None = None
+    if not enabled:
+        active = (gui or {}).get("hwnd_active") or 0
+        for w in thread_windows:
+            if w["hwnd"] != hwnd and w["enabled"] and w["hwnd"] == active:
+                blocker = w
+                break
+        if blocker is None:
+            for w in thread_windows:
+                if w["hwnd"] != hwnd and w["enabled"]:
+                    blocker = w
+                    break
+
+    return {
+        "hwnd": hwnd,
+        "title": win32gui.GetWindowText(hwnd),
+        "enabled": enabled,
+        "visible": bool(win32gui.IsWindowVisible(hwnd)),
+        "foreground": win32gui.GetForegroundWindow() == hwnd,
+        "thread_id": tid,
+        "gui_thread": gui,
+        "thread_windows": thread_windows,
+        "likely_modal_blocker": blocker,
+        "blocked": (not enabled) and blocker is not None,
+    }

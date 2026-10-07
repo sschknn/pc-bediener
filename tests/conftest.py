@@ -87,13 +87,50 @@ def fake_gui(monkeypatch) -> FakePyAutoGUI:
 
     ``gui`` bekommt die Attrappe direkt gesetzt; ``vision`` importiert
     ``pyautogui`` inline, weshalb der Eintrag in ``sys.modules`` genügt.
+
+    Zusätzlich wird ``gui._hard_set_cursor`` auf ``moveTo`` umgeleitet.
+    Ohne das ruft :func:`pcbediener.modules.gui.click` das echte
+    ``win32api.SetCursorPos`` auf und schiebt beim Testlauf den **echten**
+    Cursor des Users auf dem Desktop herum. Weil die Verifikation danach
+    aus der Attrappe liest, stimmen die Koordinaten sonst nicht überein und
+    die Tests schlagen mit einer irreführenden UIPI-Meldung fehl.
     """
     from pcbediener.modules import gui
 
     fake = FakePyAutoGUI()
     monkeypatch.setattr(gui, "_pyautogui", lambda: fake)
     monkeypatch.setitem(sys.modules, "pyautogui", fake)
+    monkeypatch.setattr(
+        gui, "_hard_set_cursor",
+        lambda x, y, pg, cfg=None: pg.moveTo(x, y),
+    )
     return fake
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cursor_control():
+    """Netz: kein Test darf je den echten Cursor/Tastatur-Desktop bewegen.
+
+    ``fake_gui`` deckt den Normalfall ab. Dieser autouse-Wächter fängt die
+    Restpfade ab, die direkt an Win32 vorbeizielen – z.B.
+    ``ctypes.windll.user32.SetCursorPos`` in ``modules/background.py`` oder
+    ein ``import win32api`` innerhalb einer Funktion. Ein Test, der den
+    Desktop des Users anfasst, ist ein Test, der beim Ausführen flackert.
+    """
+    import win32api
+
+    def _blocked(*_args, **_kwargs):
+        raise AssertionError(
+            "Test hat den echten Cursor bewegt. Nutze die fake_gui-Fixture "
+            "und leite gui._hard_set_cursor darauf um."
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(win32api, "SetCursorPos", _blocked, raising=False)
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
 
 
 @pytest.fixture

@@ -18,7 +18,50 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from pcbediener import runtime
 from pcbediener.config import Config
-from pcbediener.mcp_server import server
+from pcbediener.mcp_server import _expected_errors, server
+
+
+class TestGuardSichtbarkeit:
+    """Modul-E-Fehler müssen lesbar sein, nicht 'Error executing tool X'."""
+
+    def test_automationsfehler_werden_erfasst(self):
+        """pywinauto-Fehler erben oft direkt von Exception."""
+        pytest.importorskip("pywinauto")
+        erfasst = {e.__name__ for e in _expected_errors()}
+        for name in ("ElementNotFoundError", "WindowNotFoundError"):
+            assert name in erfasst, (
+                f"{name} fehlt in _expected_errors() – der Fehler würde "
+                f"undurchsichtbar als 'Error executing tool ...' landen."
+            )
+
+    def test_com_error_erfasst(self):
+        pytest.importorskip("comtypes")
+        from comtypes import COMError
+
+        assert COMError in _expected_errors()
+
+    def test_basisfehler_weiterhin_erfasst(self):
+        erfasst = _expected_errors()
+        for basis in (OSError, ValueError, RuntimeError):
+            assert basis in erfasst
+
+    def test_guard_macht_uia_fehler_lesbar(self):
+        """Regression: guard muss einen echten pywinauto-Fehler umsetzen."""
+        pytest.importorskip("pywinauto")
+        from pywinauto import ElementNotFoundError
+
+        from pcbediener.mcp_server import guard
+
+        @guard
+        def _tool() -> None:
+            raise ElementNotFoundError("kein Element mit diesem Namen")
+
+        with pytest.raises(ToolError) as excinfo:
+            _tool()
+
+        text = str(excinfo.value)
+        assert "ElementNotFoundError" in text
+        assert "kein Element mit diesem Namen" in text
 
 
 def call(name: str, **arguments) -> tuple[bool, str]:

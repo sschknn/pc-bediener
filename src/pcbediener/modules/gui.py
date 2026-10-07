@@ -276,6 +276,25 @@ def sendinput_click(
             "method": "sendinput", "events": sent}
 
 
+def _hard_set_cursor(x: int, y: int, pg: Any, cfg: Config | None = None) -> None:
+    """Setzt den Cursor hart auf (x, y) – ohne Animationsweg.
+
+    Eigene Funktion statt eines Inline-``import win32api``, damit die
+    Testsuite eine einzige, dokumentierte Naht zum Patchen hat. Vorher
+    rief :func:`click` ``win32api.SetCursorPos`` direkt auf – jeder
+    GUI-Test verschob dadurch den **echten** Cursor des Users, obwohl
+    die Attrappe in ``tests/conftest.py`` genau das verbietet. Die
+    Verifikation in :func:`click` liest die Position anschließend aus
+    ``pg``, also musste die Attrappe den Sprung mitbekommen.
+    """
+    try:
+        import win32api
+
+        win32api.SetCursorPos((int(x), int(y)))
+    except Exception:
+        move_mouse(x, y, cfg) if cfg else pg.moveTo(x, y)
+
+
 def click(
     x: int | None = None,
     y: int | None = None,
@@ -341,12 +360,7 @@ def click(
     pg = _pyautogui()
     if x is not None and y is not None:
         # Position hart setzen und danach prüfen, statt zu hoffen.
-        try:
-            import win32api
-
-            win32api.SetCursorPos((int(x), int(y)))
-        except Exception:
-            move_mouse(x, y, cfg) if cfg else pg.moveTo(x, y)
+        _hard_set_cursor(int(x), int(y), pg, cfg)
 
         actual = pg.position()
         if (int(actual[0]), int(actual[1])) != (int(x), int(y)):

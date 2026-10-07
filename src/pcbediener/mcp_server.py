@@ -11,8 +11,9 @@ Die Tools sind nach den Modulen A-D aus der Aufgabenstellung benannt:
 
 from __future__ import annotations
 
-import functools
-import time
+import functools
+import importlib
+import time
 from typing import Any, Callable
 
 from mcp.server.mcpserver import Image, MCPServer
@@ -90,20 +91,52 @@ CONFIRM_DOC = (
 )
 
 
-def guard(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Macht erwartete Fehler zu lesbaren Tool-Fehlern statt zu Abstürzen.
-
-    Ohne diesen Wrapper würde der MCP-Server bei jedem kleinen Fehler nur
-    "Error executing tool X" melden und den Traceback verstecken – die KI könnte
-    den Fehler dann nicht selbst korrigieren.
-    """
-    expected = (
-        SafetyError,
-        OSError,  # FileNotFoundError, PermissionError, IsADirectoryError, ...
-        ValueError,
-        RuntimeError,
-        NotImplementedError,
-    )
+#: Fehler, die der MCP-Server als Tool-Fehler melden soll statt als
+#: "Error executing tool X" ohne jede Spur. pywinauto und comtypes erben
+#: vielfach direkt von ``Exception`` – ohne diese Liste fielen Fehler aus
+#: Modul E (Hintergrund-Automation) durch und die KI konnte sie nicht
+#: korrigieren. Die Namen unterscheiden sich je nach pywinauto-Version,
+#: deshalb wird vorsichtig nachgeschlagen statt fest verdrahtet.
+_AUTOMATION_ERRORS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("comtypes", ("COMError", "com_error")),
+    ("pywinauto", ("AppNotConnected", "ElementAmbiguousError",
+                   "ElementNotFoundError", "WindowAmbiguousError",
+                   "WindowNotFoundError")),
+    ("pywinauto.application", ("AppNotConnected", "ProcessNotFoundError")),
+    ("pywinauto.uia_defines", ("NoPatternInterfaceError",)),
+)
+
+
+def _expected_errors() -> tuple[type[BaseException], ...]:
+    """Die Fehlertypen, die :func:`guard` in lesbare Tool-Fehler übersetzt."""
+    found: list[type[BaseException]] = []
+    for module_name, names in _AUTOMATION_ERRORS:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        for name in names:
+            candidate = getattr(module, name, None)
+            if isinstance(candidate, type) and issubclass(candidate, BaseException):
+                found.append(candidate)
+    return (
+        SafetyError,
+        OSError,  # FileNotFoundError, PermissionError, IsADirectoryError, ...
+        ValueError,
+        RuntimeError,
+        NotImplementedError,
+        *found,
+    )
+
+
+def guard(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Macht erwartete Fehler zu lesbaren Tool-Fehlern statt zu Abstürzen.
+
+    Ohne diesen Wrapper würde der MCP-Server bei jedem kleinen Fehler nur
+    "Error executing tool X" melden und den Traceback verstecken – die KI könnte
+    den Fehler dann nicht selbst korrigieren.
+    """
+    expected = _expected_errors()
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:

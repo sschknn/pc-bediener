@@ -160,6 +160,28 @@ class TestRobustClick:
         result = mod_gui.click(400, 300, cfg, confirm=True)
         assert result["clicked"] == {"x": 400, "y": 300}
 
+    def test_hard_set_cursor_uses_win32(self, cfg: Config, monkeypatch):
+        """Regression: der Produktionspfad muss SetCursorPos benutzen.
+
+        ``fake_gui`` leitet ``_hard_set_cursor`` bewusst auf ``moveTo`` um,
+        damit kein Test den echten Cursor bewegt. Dieser Test ruft die
+        *echte* Funktion daher ohne Attrappe auf und prüft, dass sie
+        ``win32api.SetCursorPos`` benutzt – sonst würde die Umleitung
+        stillschweigend zum Produktionsverhalten.
+        """
+        import win32api
+
+        seen: list[tuple[int, int]] = []
+        monkeypatch.setattr(win32api, "SetCursorPos", lambda pos: seen.append(tuple(pos)))
+
+        class _NoMove:
+            def moveTo(self, *_a, **_kw):  # noqa: N802
+                raise AssertionError("darf hier nicht ausweichen")
+
+        mod_gui._hard_set_cursor(321, 654, _NoMove(), cfg)
+
+        assert seen == [(321, 654)]
+
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Fensterzugriff nur unter Windows")
 class TestWindows:

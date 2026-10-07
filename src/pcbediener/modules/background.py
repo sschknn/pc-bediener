@@ -15,6 +15,7 @@ Klassik-Apps; neue WinUI-Apps brauchen ``menu_select`` oder
 from __future__ import annotations
 
 import ctypes
+import threading
 import time
 from typing import Any
 
@@ -22,13 +23,35 @@ from ..config import Config  # noqa: F401 – Rückgabewerte tragen cfg-Typ
 
 Bennennung = dict[str, Any]
 
+#: Marker pro Thread: COM ist dort schon als STA initialisiert.
+#:
+#: ``pythoncom.CoInitialize()`` ist ein Zähler, kein Flag – jeder Aufruf
+#: erhöht ihn um eins, und nur ``CoUninitialize()`` baut ihn ab. Ein Aufruf
+#: pro Tool-Call ließ den Zähler im stundenlang laufenden MCP-Server
+#: unbegrenzt wachsen; danach war die UIA-Schnittstelle des Prozesses
+#: verklemmt und Modul E antwortete nur noch mit "Error executing tool ...".
+#: Einmal pro Thread initialisieren und bewusst *nicht* abbauen: der Thread
+#: soll für die Lebensdauer STA bleiben, genau das will pywinauto.
+_com_state = threading.local()
 
-def _desktop():
+
+def _ensure_com_sta() -> None:
+    """Initialisiert COM einmal pro Thread als STA (pywinauto-Bedarf)."""
+    if getattr(_com_state, "ready", False):
+        return
     try:
         import pythoncom
-        pythoncom.CoInitialize()  # pywinauto braucht STA; fehlt oft in async MCP-Servern
+
+        pythoncom.CoInitialize()
+        _com_state.ready = True
     except Exception:
+        # Kein pythoncom oder schon im falschen Apartment: pywinauto
+        # versucht es selbst und meldet einen brauchbaren Fehler.
         pass
+
+
+def _desktop():
+    _ensure_com_sta()
     try:
         from pywinauto import Desktop
     except ImportError as exc:  # pragma: no cover

@@ -101,11 +101,16 @@ TEMPO_TARGET_EXAMPLE = 160.0
 RECIPES = {
     # Das Tempo-Panel nimmt keine Tastatureingaben (kein Edit-Modus);
     # Draggen ändert den Wert grob. Robust: MIDI mit Tempo-Event importieren.
+    #
+    # ACHTUNG – der MIDI-Import legt ein Pattern an und setzt es an die
+    # Wiedergabeposition in die Playlist. Liegt dort schon ein Clip, wird er
+    # ersetzt (in einer Sitzung hat das so den dritten Beat-Track vernichtet).
+    # Vorher also entweder ans Projektende springen oder die Position prüfen.
     "set_tempo": (
         "FILE > Import > MIDI (tempoXXX.mid mit FF 51 03 <us/beat>), "
         "Confirm mit 'No' beantworten, Pfad in den Open-Dialog (Zwischenablage + Enter), "
-        "Import-Dialog mit 'Start new project' akzeptieren – "
-        "danach Toolbar-OCR prüfen."
+        "danach Toolbar-OCR prüfen. ACHTUNG: der Import legt ein Pattern "
+        "an der Wiedergabeposition an - vorhandene Clips dort gehen verloren."
     ),
     # FL-Browser kennt nur seine Datenbank; fremde Ordner per Explorer-Drag&Drop.
     "import_audio": (

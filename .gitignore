@@ -37,6 +37,8 @@ hardtekk/_tts_blocklicht/
 hardtekk/HARTTEXT.wav
 hardtekk/_*.py
 hardtekk/build_blocklicht.py
+# Zwischenergebnisse der TTS-/Chop-Probelaeufe
+hardtekk/_probe/
 
 --- Secrets ---
 .env

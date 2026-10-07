@@ -78,6 +78,36 @@ class Config:
     vision_primary: str = "opencode/space-bunny-free"
     vision_fallback: str = "opencode/fledge-alpha-free"
 
+    # --- LLM-Fallback-Kette -----------------------------------------------
+    # Priorisierte Liste aller kostenlosen Text-Modelle, die bei Rate-Limit,
+    # Quota- oder Credits-Fehlern automatisch als Nächstes probiert werden.
+    # Die Reihenfolge orientiert sich am Latenz-Test (schnellste zuerst).
+    model_chain: list[str] = field(
+        default_factory=lambda: [
+            "opencode/ling-3.1-flash-free",
+            "opencode/space-bunny-free",
+            "opencode/fledge-alpha-free",
+            "opencode/longcat-2.5-preview-free",
+            "opencode/mimo-v2.6-flash-free",
+            "opencode/muse-spark-1.3-contributor-free",
+            "opencode/nemotron-3.5-lightning-free",
+            "google/gemma-4-31b-it",
+            "openrouter/apodex/apodex-1.1-mini:free",
+            "openrouter/stealth/space-bunny-alpha",
+            "openrouter/poolside/laguna-s-2.1:free",
+            "openrouter/dots-studio/dots-3-note-preview:free",
+            "openrouter/cohere/north-mini-code:free",
+            "openrouter/liquid/lfm-2.5-2.6b:free",
+            "openrouter/poolside/laguna-xs-2.1:free",
+            "openrouter/openrouter/free",
+        ]
+    )
+    # Wie lange ein Modell nach einem Fehler nicht erneut versucht wird (Sekunden).
+    model_cooldown_s: int = 60
+    # Wie oft hintereinander ein Modell Fehlerzeichen zeigen darf, bevor es
+    # komplett aus der Kette entfernt wird.
+    model_max_failures: int = 3
+
     def __post_init__(self) -> None:
         if not self.screenshot_dir:
             self.screenshot_dir = str(default_screenshot_dir())

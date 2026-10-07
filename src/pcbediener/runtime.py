@@ -8,6 +8,7 @@ kann (z.B. von ``confirm`` auf ``auto``), ohne den Server neu zu starten.
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 from .config import Config, load_config
@@ -15,6 +16,9 @@ from .safety import SafetyError
 
 _lock = threading.RLock()
 _config: Config | None = None
+
+#: Pro-Modell-Status: { model_id: {"failures": int, "last_failure": float | None, "cooldown_until": float | None} }
+_model_state: dict[str, dict[str, float | int | None]] = {}
 
 
 def get_config() -> Config:
@@ -69,4 +73,60 @@ def describe() -> dict[str, object]:
         "exec_cwd": cfg.exec_cwd or "Projektordner",
         "screenshot_dir": cfg.screenshot_dir,
         "extra_forbidden_patterns": cfg.forbidden_patterns,
+        "model_state": dict(_model_state),
     }
+
+
+def get_model_state(model_id: str) -> dict[str, float | int | None]:
+    """Liefert (und erzeugt) den Status eines Modells."""
+    with _lock:
+        state = _model_state.setdefault(
+            model_id,
+            {"failures": 0, "last_failure": None, "cooldown_until": None},
+        )
+        return dict(state)
+
+
+def record_model_failure(model_id: str) -> None:
+    """Erhöht den Fehlerzähler und setzt den Cooldown-Timer für ein Modell."""
+    cfg = get_config()
+    now = time.monotonic()
+    with _lock:
+        state = _model_state.setdefault(
+            model_id,
+            {"failures": 0, "last_failure": None, "cooldown_until": None},
+        )
+        state["failures"] = int(state["failures"]) + 1
+        state["last_failure"] = now
+        state["cooldown_until"] = now + cfg.model_cooldown_s
+
+
+def reset_model_state(model_id: str | None = None) -> None:
+    """Setzt den Status eines oder aller Modelle zurück (nach Erfolg)."""
+    with _lock:
+        if model_id:
+            _model_state.pop(model_id, None)
+        else:
+            _model_state.clear()
+
+
+def model_available(model_id: str) -> bool:
+    """Prüft, ob ein Modell momentan nicht im Cooldown/Sperrliste ist."""
+    cfg = get_config()
+    state = get_model_state(model_id)
+    now = time.monotonic()
+    cooldown_until = state.get("cooldown_until")
+    if cooldown_until is not None and now < float(cooldown_until):
+        return False
+    if int(state.get("failures", 0)) >= cfg.model_max_failures:
+        return False
+    return True
+
+
+def next_available_model() -> str | None:
+    """Liefert das erste Modell aus der Kette, das momentan verwendbar ist."""
+    cfg = get_config()
+    for model in cfg.model_chain:
+        if model_available(model):
+            return model
+    return None

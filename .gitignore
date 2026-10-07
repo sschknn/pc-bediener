@@ -28,7 +28,6 @@ logs/
 # hardtekk/make_voxkit.py - 35 MB muessen nicht ins Git.
 # Vor dem Auskommentieren: bewusst entscheiden, ob sie ins Repo sollen.
 #hardtekk/voxkit/
-*.mid
 
 --- Secrets ---
 .env

@@ -29,6 +29,15 @@ logs/
 # Vor dem Auskommentieren: bewusst entscheiden, ob sie ins Repo sollen.
 #hardtekk/voxkit/
 
+# Audio-Bausteine und Render-Ergebnisse: synthetisch und jederzeit ueber
+# hardtekk/make_voxkit.py bzw. make_audio.py neu erzeugbar. Bei knapp 50 MB
+# gehoeren die nicht ins Repository.
+hardtekk/voxkit/
+hardtekk/_tts_blocklicht/
+hardtekk/HARTTEXT.wav
+hardtekk/_*.py
+hardtekk/build_blocklicht.py
+
 --- Secrets ---
 .env
 config.local.json

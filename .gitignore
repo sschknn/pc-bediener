@@ -1,4 +1,4 @@
-# --- Python ---
+﻿# --- Python ---
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -19,6 +19,16 @@ captures/
 --- Logs ---
 *.log
 logs/
+
+--- Skript-Artefakte ---
+# Skripte, die %TEMP% als literalen Ordnernamen angelegt haben (die
+# Umgebungsvariable wurde nicht expandiert). Faellt regelmaessig auf.
+%TEMP%/
+# Generierte Audio-Bausteine sind reproduzierbar ueber
+# hardtekk/make_voxkit.py - 35 MB muessen nicht ins Git.
+# Vor dem Auskommentieren: bewusst entscheiden, ob sie ins Repo sollen.
+#hardtekk/voxkit/
+*.mid
 
 --- Secrets ---
 .env

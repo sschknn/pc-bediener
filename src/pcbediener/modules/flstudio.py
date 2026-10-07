@@ -26,6 +26,10 @@ MAIN_CLASS = "TFruityLoopsMainForm"
 RENAME_CLASS = "TNameEditForm"
 #: Modal: Bestätigungsdialoge („Confirm", „Save changes …?").
 CONFIRM_CLASS = "TMsgForm"
+#: FLs eigener „Save as"-Dialog (Ctrl+S bei unbenanntem Projekt). Kein
+#: Systemdialog – Pfad-Paste über die Zwischenablage greift hier nicht, man
+#: muss das vorbelegte Name-Feld ersetzen und die Radiobuttons bedienen.
+SAVE_AS_CLASS = "TNewProjForm"
 #: System-Dateidialog („Open").
 FILE_DIALOG_CLASS = "#32770"
 #: Aufklapp-Menüs (FILE/VIEW/Import …).
@@ -37,6 +41,7 @@ WINDOW_CLASSES = {
     "main": MAIN_CLASS,
     "rename": RENAME_CLASS,
     "confirm": CONFIRM_CLASS,
+    "save_as": SAVE_AS_CLASS,
     "file_dialog": FILE_DIALOG_CLASS,
     "popup_menu": POPUP_MENU_CLASS,
     "hint_bar": HINT_BAR_CLASS,
@@ -54,7 +59,14 @@ SHORTCUT_PLAYLIST = ["f5"]
 SHORTCUT_CHANNEL_RACK = ["f6"]
 SHORTCUT_PIANO_ROLL = ["f7"]
 SHORTCUT_MIXER = ["f9"]
-SHORTCUT_BROWSER = ["alt", "f8"]
+#: Der Browser hat **kein** Umschalt-Kürzel – er ist ein dauerhaft
+#: eingdocktes Panel links und immer sichtbar. ``alt+f8`` wurde als
+#: Browser-Kürzel angenommen und tat nichts; ``f8`` öffnet stattdessen
+#: das Fenster ``PlugList``. Für den Browser einfach die Liste links
+#: anklicken und Dateien in die Playlist ziehen.
+SHORTCUT_BROWSER: tuple[str, ...] = ()
+#: ``f8`` öffnet die Plugin-Liste.
+SHORTCUT_PLUGLIST = ["f8"]
 
 # --- MIDI-Scripting (Web-Recherche: flmidi-101 / Image-Line) ------------------
 #: Skripte liegen unter ``<User data>\FL Studio\Settings\Hardware\<Name>\``.

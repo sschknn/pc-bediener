@@ -130,3 +130,135 @@ RECIPES = {
         "likely_modal_blocker (TNameEditForm/TMsgForm) schließen."
     ),
 }
+
+# --- Script-output-Interpreter (FL 26.1, empirisch ermittelt) ------------------
+#
+# VIEW > "Script output" ist eine eingedockte Seite von FLs Hauptfenster
+# (Kette: TQuickMemo < TVectorSheet < TPythonForm < TFruityLoopsMainForm).
+# Damit laesst sich FLs Python-API bedienen - unabhaengig von MIDI-Geraeten,
+# die FL exklusiv haelt (midiOutOpen liefert rc=10).
+#
+# WICHTIGSTE FALLE DER GANZEN SITZUNG:
+# ``keyboard_type(use_clipboard=True)`` schreibt in das Eingabefeld
+# **nicht** - ohne jede Fehlermeldung, das Feld bleibt einfach leer und der
+# Befehl laeuft nie. Es muss Zeichen fuer Zeichen getippt werden
+# (``use_clipboard=False``). Das war die Ursache dafuer, dass sich die
+# Bruecke ueber Stunden als "tot" darstellte.
+
+#: Reiter des Script-Fensters (TQuickSheetSelector) und seiner Kinder.
+SCRIPT_WINDOW_CLASS = "TPythonForm"
+SCRIPT_OUTPUT_TITLE = "Script output"
+#: Seitenreiter: "Interpreter" bzw. "loopMIDI Port 2". Standardmaessig steht
+#: der Skript-Reiter vorn - dann nimmt das Eingabefeld nichts an.
+SCRIPT_TAB_CLASS = "TQuickSheetSelector"
+SCRIPT_INPUT_CLASS = "TPyFormEdit"
+SCRIPT_OUTPUT_CLASS = "TQuickMemo"
+
+#: Layout des Script-Fensters, gemessen per Win32 (``GetWindowRect`` der
+#: Kinder), Fenster bei (400, 60, 630, 1000):
+#:   TNewCaption      (404,  64, 1026,  90)
+#:   TQuickSheetSelector (406,  93, 1024, 125)
+#:   TPyFormEdit      (414, 146, 1016, 170)   <- Eingabefeld, Mitte y=158
+#:   TQuickMemo       (414, 193, 1016, 987)   <- Ausgabe
+#:   TVectorPanel     (406, 996, 1024, 1054)  <- "Clear output" links
+#: Der Klick muss in den TEXTBEREICH des Feldes (y 146..170). Auf den blauen
+#: Rahmen geklickt geht der Cursor zwar hin, die Eingabe geht danach verloren.
+SCRIPT_INPUT_BOX = (414, 146, 1016, 170)
+
+#: Verfuegbare Module (import-Test, FL 26.1): channels, general, transport,
+#: playlist, mixer, patterns, device, ui. **Nicht** vorhanden: pattern (kein
+#: setStep/getStep), info, note, crowdmix, daw, debug, fl.
+SCRIPT_MODULES = (
+    "channels", "general", "transport", "playlist",
+    "mixer", "patterns", "device", "ui",
+)
+
+#: Was die API kann - und was sie nicht kann. Erschuetterend, aber entscheidend
+#: fuer die Aufgabenverteilung GUI/API:
+#:
+#: Kann:  mixer.setCurrentTempo(bpm*1000) / getCurrentTempo()
+#:        patterns.setPatternLength(i, takte) / getPatternLength(i)
+#:        patterns.setPatternName / getPatternName / patternCount
+#:        channels.getChannelName / setChannelName / muteChannel
+#:        playlist.getTrackName / setTrackName / trackCount / selectTrack
+#:        transport.play() / stop()
+#:
+#: Kann NICHT:
+#:   * Playlist-Clips anlegen. ``playlist`` existiert in 26.1 zwar, hat aber
+#:     nur Lese-/Auswahlfunktionen. ``insertLoopMode`` und
+#:     ``insertPatternClip`` existieren NICHT - ``includeLoopMode`` ist nur
+#:     der Snap-Modus. Deshalb: Clip per Stift-Werkzeug + Klick zeichnen.
+#:   * Steps schreiben. Kein ``pattern``-Modul, kein setStep/getNote.
+#:   * Dateien lesen/schreiben. ``open()`` -> SystemError, ``os.system`` und
+#:     ``subprocess`` liefern -1 (gesperrt). Auch ``__file__`` fehlt.
+#:     print() ins Memo ist der einzige Ausgabekanal.
+#:   * Zaehlerfunktionen sind unzuverlaessig: ``patterns.patternCount()``
+#:     lieferte 0, obwohl Pattern 0 existierte und ``getPatternLength(0)``
+#:     sauber 70 zurueckgab. Einzelabfragen funktionieren, also nicht auf
+#:     die Zaehler verlassen.
+#:
+#: Im Memo liest man die Ausgabe per Screenshot. ``WM_GETTEXT`` auf dem
+#: Delphi-Memo (TQuickMemo) und auf dem Eingabefeld (TPyFormEdit) liefert
+#: nichts - das sind keine Standard-Controls.
+SCRIPT_API_FACTS = {
+    "tempo_einheit": "mixer.setCurrentTempo(157000) -> 157.000 BPM; float wirft RuntimeError",
+    "kein_dateisystem": "open() -> SystemError, os.system/subprocess -> -1",
+    "kein_clip_api": "playlist.insertLoopMode / insertPatternClip existieren nicht",
+    "kein_step_api": "kein pattern-Modul, kein setStep",
+    "zaehler_maeandern": "patterns.patternCount() liefert 0 trotz existierender Patterns",
+}
+
+#: FL malt nur die Panels neu, die sich geaendert haben. Nach Klicks auf das
+#: Script-Fenster oder den Channel Rack bleibt der Bildschirm "stale" - man
+#: sieht dann den alten Playlist- oder Mixer-Inhalt an der Stelle des
+#: Script-Fensters, obwohl der Befehl ausgefuehrt wurde. Win32 meldet
+#: weiterhin korrekt Fenster und Trefferpunkt; nur die Pixel luegen.
+#: Abhilfe: vor jeder Messung FL minimieren und restaurieren
+#: (``SW_MINIMIZE``/``SW_RESTORE``), fuer den Rack dessen ``SC_RESTORE``/
+#: ``SC_MAXIMIZE``. Das kostet ~2 s, spart aber Stunden Fehldeutung.
+RECIPES_STALE = (
+    "FL zeichnet Panels nicht zuverlaessig neu. Vor jeder Pixelmessung "
+    "FL minimieren+restaurieren; fuer den Channel Rack SC_RESTORE/SC_MAXIMIZE. "
+    "Win32-Fensterdaten sind dabei immer korrekt, nur die Pixel nicht."
+)
+
+RECIPES.update({
+    # Tempo ueber die API statt ueber MIDI-Import: kein Neben effect, der
+    # Clips an der Wiedergabeposition zerstoert.
+    "set_tempo_api": (
+        "VIEW > Script output, Reiter 'Interpreter' anklicken, Feld bei "
+        "(715,158) mit use_clipboard=False tippen: "
+        "import mixer; mixer.setCurrentTempo(140000). "
+        "Toolbar zeigt danach 140.000."
+    ),
+    # Clip-Laenge haengt an der Pattern-Laenge - das umgeht das Ziehen des
+    # Clip-Randes, dessen Kante ausserhalb des Bildschirms liegt.
+    "clip_laenge": (
+        "patterns.setPatternLength(0, taktzahl) setzt die Pattern-Laenge. "
+        "Ein neu gezeichneter Playlist-Clip erbt sie. Danach Clip mit dem "
+        "Stift-Werkzeug (1076,136) und einem Klick auf die Spurspur ziehen."
+    ),
+    "script_output_fenster": (
+        "TPythonForm ist ein KINDfenster von FL. Position per "
+        "SetWindowPos setzen, nicht per Maus-Drag - der Drag riss das "
+        "FL-Hauptfenster mit und minimierte es."
+    ),
+    "steps_programmieren": (
+        "Channel Rack per SC_MAXIMIZE vergroessern, dann Step n bei "
+        "x = 602 + (n-1)*16, Kanaele y = 141/171/201/231/261. "
+        "FL verschluckt einzelne Klicks: Soll-Ist-Loop bauen - klicken, "
+        "Rack neu zeichnen, Steps per Pixelanalyse lesen, nachbessern."
+    ),
+    "step_geometrie_falle": (
+        "Die ersten zwei Knöpfe einer Kanalzeile (x=573, 590) sind "
+        "Vorschau-Felder, KEINE Steps. Eine Schaetzung lag hier 20 px daneben "
+        "undProgrammierte die falschen Steps."
+    ),
+    "speichern_als": (
+        "Ctrl+S ueberschreibt ein benanntes Projekt still. Immer "
+        "Ctrl+Shift+S; FL zeigt den normalen Windows-Dialog (#32770). "
+        "Pfad per WM_SETTEXT ins Namensfeld, Save-Knopf per BM_CLICK. "
+        "Die Rueckfrage 'Datei existiert' sitzt im Dialog 'Confirm Save As' "
+        "und wird ebenfalls per BM_CLICK auf '&Yes' bestaetigt."
+    ),
+})

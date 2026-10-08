@@ -1,0 +1,331 @@
+{
+  "song": "BLOCKLICHT",
+  "bpm": 150.0,
+  "key": "F# minor",
+  "bars": 72,
+  "bar_s": 1.6,
+  "sixteenth_s": 0.1,
+  "length_s": 115.2,
+  "voices": [
+    "de-DE-ConradNeural",
+    "de-DE-KillianNeural",
+    "de-AT-JonasNeural"
+  ],
+  "lyric_lines": [
+    {
+      "bar": 8,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Blocklicht an, die Wand zittert, die Box haemmert weiter"
+    },
+    {
+      "bar": 10,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Kein Nachbar schlaeft, mein Bass frisst die halbe Haeuserzeile"
+    },
+    {
+      "bar": 12,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Jacke zu, die Anlage laeuft, mein Herz ist der Bass"
+    },
+    {
+      "bar": 14,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Beton tanzt, das Flackern stirbt, wir drehen auf wie Kerzen"
+    },
+    {
+      "bar": 20,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "HARTEK bis die Sonne kracht, wir bauen auf die Nacht"
+    },
+    {
+      "bar": 22,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Kein Zurueck, kein Zoegern, die Wand faellt krach"
+    },
+    {
+      "bar": 24,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "HARTEK, HARTEK, die Maschine schlaegt"
+    },
+    {
+      "bar": 26,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Bis das letzte Lichterl sich nicht mehr bewegt"
+    },
+    {
+      "bar": 28,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Zwischen Hochhaus und Hinterhof tickt der Bass im Takt"
+    },
+    {
+      "bar": 30,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Jeder Fensterplatz ein Schrein, mein Echo waechst und waechst"
+    },
+    {
+      "bar": 32,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Du kannst lachen oder verstummen, wir sind nicht zurueck"
+    },
+    {
+      "bar": 34,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Bis zum letzten Funken kommt die Nacht zu mir"
+    },
+    {
+      "bar": 40,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "HARTEK bis die Sonne kracht, wir bauen auf die Nacht"
+    },
+    {
+      "bar": 42,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Kein Zurueck, kein Zoegern, die Wand faellt krach"
+    },
+    {
+      "bar": 44,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "HARTEK, HARTEK, die Maschine schlaegt"
+    },
+    {
+      "bar": 46,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Bis das letzte Lichterl sich nicht mehr bewegt"
+    },
+    {
+      "bar": 48,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-KillianNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Kalt und nass die Fassade, aber die Boxen heizen ein"
+    },
+    {
+      "bar": 50,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-KillianNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Sechzehn Takte Blindflug, dann explodiert der Schein"
+    },
+    {
+      "bar": 52,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-KillianNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Ich dreh die Anlage hoch, bis die Waende singen lernt"
+    },
+    {
+      "bar": 54,
+      "bars": 2,
+      "mode": "rap",
+      "voice": "de-DE-KillianNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Alles was wir waren, hoert die Nacht sich selbst verbrennen"
+    },
+    {
+      "bar": 60,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "HARTEK bis die Sonne kracht, wir bauen auf die Nacht"
+    },
+    {
+      "bar": 62,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Kein Zurueck, kein Zoegern, die Wand faellt krach"
+    },
+    {
+      "bar": 64,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "HARTEK, HARTEK, die Maschine schlaegt"
+    },
+    {
+      "bar": 66,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "Bis das letzte Lichterl sich nicht mehr bewegt"
+    },
+    {
+      "bar": 68,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "HARTEK, HARTEK, bis der Block mich traegt"
+    },
+    {
+      "bar": 70,
+      "bars": 2,
+      "mode": "hook",
+      "voice": "de-DE-ConradNeural",
+      "dur": 3.11,
+      "target": 3.2,
+      "text": "HARTEK, HARTEK, die Maschine schlaegt"
+    },
+    {
+      "bar": 21,
+      "bars": 1,
+      "mode": "adlib",
+      "voice": "de-AT-JonasNeural",
+      "dur": 1.51,
+      "target": 1.6,
+      "text": "HARTEK!"
+    },
+    {
+      "bar": 25,
+      "bars": 1,
+      "mode": "adlib",
+      "voice": "de-AT-JonasNeural",
+      "dur": 1.51,
+      "target": 1.6,
+      "text": "Haert!"
+    },
+    {
+      "bar": 27,
+      "bars": 1,
+      "mode": "adlib",
+      "voice": "de-AT-JonasNeural",
+      "dur": 1.51,
+      "target": 1.6,
+      "text": "Hoerst du?"
+    },
+    {
+      "bar": 43,
+      "bars": 1,
+      "mode": "adlib",
+      "voice": "de-AT-JonasNeural",
+      "dur": 1.51,
+      "target": 1.6,
+      "text": "HARTEK!"
+    },
+    {
+      "bar": 45,
+      "bars": 1,
+      "mode": "adlib",
+      "voice": "de-AT-JonasNeural",
+      "dur": 1.51,
+      "target": 1.6,
+      "text": "Weiter!"
+    },
+    {
+      "bar": 47,
+      "bars": 1,
+      "mode": "adlib",
+      "voice": "de-AT-JonasNeural",
+      "dur": 1.51,
+      "target": 1.6,
+      "text": "Hoerst du?"
+    },
+    {
+      "bar": 69,
+      "bars": 1,
+      "mode": "adlib",
+      "voice": "de-AT-JonasNeural",
+      "dur": 1.51,
+      "target": 1.6,
+      "text": "HARTEK!"
+    },
+    {
+      "bar": 70,
+      "bars": 1,
+      "mode": "adlib",
+      "voice": "de-AT-JonasNeural",
+      "dur": 1.51,
+      "target": 1.6,
+      "text": "Ja!"
+    },
+    {
+      "bar": 71,
+      "bars": 1,
+      "mode": "adlib",
+      "voice": "de-DE-KillianNeural",
+      "dur": 1.51,
+      "target": 1.6,
+      "text": "HARTEK!"
+    }
+  ]
+}

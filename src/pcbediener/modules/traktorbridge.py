@@ -127,6 +127,32 @@ COMMANDS: dict[int, tuple[str, str, str]] = {
 CONFIRMED: frozenset[int] = frozenset({60})
 
 
+# --- CC-Register (Mixer: Fader & Crossfader) --------------------------------
+#
+# Fader und Regler laufen in Traktor **nicht** ueber Noten, sondern ueber
+# Control-Change mit Interaction "Direct": der CC-Wert (0..127) bildet direkt
+# den Parameter (0..1) ab. Deshalb ein eigenes Register; die Bindungsnamen
+# heissen "Ch01.CC.<nnn>". Die CMAD-Vorlagen kommen 1:1 aus einem Werksmapping
+# (siehe ``tools/traktor_mapping.py``), weil Noten-CMADs (Toggle) die
+# Direct-Level-Regel nicht treffen.
+CC_COMMANDS: dict[int, tuple[str, str]] = {
+    20: ("vol_a", "Mixer Volume Deck A"),
+    21: ("vol_b", "Mixer Volume Deck B"),
+    22: ("xfader", "X-Fader Position"),
+}
+
+
+def cc_number(name: str) -> int:
+    """Slug eines Mixer-Kommandos -> CC-Nummer (``"vol_a"`` -> ``20``)."""
+    for cc, (key, _desc) in CC_COMMANDS.items():
+        if key == name:
+            return cc
+    raise KeyError(
+        f"unbekanntes CC-Kommando {name!r}; bekannt: "
+        + ", ".join(sorted(k for k, _d in CC_COMMANDS.values()))
+    )
+
+
 # --- Mapping-Erkennung aus der Traktor-Konfiguration ------------------------
 #
 # Seit die Zuordnungen programmatisch in den ``DeviceIO.Config.Controller``-
@@ -238,6 +264,28 @@ def mapped_notes(path: Path | None = None) -> dict[int, str]:
     return out
 
 
+_CC_RE = re.compile(r"\.CC\.(\d+)\s*$")
+
+
+def cc_from_name(name: str) -> int | None:
+    """Traktor-Bindungsname (``"Ch01.CC.020"``) -> CC-Nummer."""
+    m = _CC_RE.search(name)
+    return int(m.group(1)) if m else None
+
+
+def mapped_ccs(path: Path | None = None) -> dict[int, str]:
+    """Gemappte Mixer-CCs aus der Settings: ``{cc: Bindungsname}``."""
+    blob = _load_blob(path)
+    if blob is None:
+        return {}
+    out: dict[int, str] = {}
+    for _bid, name in _walk_bindings(blob, 0, len(blob)):
+        cc = cc_from_name(name)
+        if cc is not None:
+            out[cc] = name
+    return out
+
+
 _STATUS_CACHE: tuple[float, frozenset[int]] | None = None
 
 
@@ -307,6 +355,56 @@ def note_on(note: int, channel: int = CHANNEL, velocity: int = VELOCITY,
             "verified_in_traktor": note in confirmed_notes()}
 
 
+def control_change(cc: int, value: int, channel: int = CHANNEL,
+                   port: int | None = None) -> dict[str, Any]:
+    """Sendet einen Control-Change (Status ``0xB0``).
+
+    ``value`` 0..127. Fuer Direct-Fader ist 0 der Minimal- und 127 der
+    Maximalwert; :func:`to_midi_value` rechnet 0.0..1.0 um.
+    """
+    if not 0 <= cc <= 127:
+        raise ValueError(f"cc muss 0..127 sein, war {cc}")
+    if not 0 <= value <= 127:
+        raise ValueError(f"value muss 0..127 sein, war {value}")
+    if not 0 <= channel <= 15:
+        raise ValueError(f"channel muss 0..15 sein, war {channel}")
+
+    index = DEFAULT_PORT if port is None else port
+    handle = flbridge._open_out(index)
+    status = 0xB0 | (channel & 0x0F)
+    try:
+        rc = _short(handle, status | ((cc & 0x7F) << 8) | ((value & 0x7F) << 16))
+        if rc != 0:
+            raise RuntimeError(f"Control-Change abgelehnt (rc={rc})")
+    finally:
+        flbridge._win().midiOutClose(handle)
+
+    entry = CC_COMMANDS.get(cc)
+    return {"cc": cc, "value": value, "channel": channel + 1, "port": index,
+            "command": entry[1] if entry else None,
+            "command_name": entry[0] if entry else None}
+
+
+def to_midi_value(value: float) -> int:
+    """0.0..1.0 -> 0..127 (auf den naechsten Schritt gerundet)."""
+    return max(0, min(127, round(value * 127)))
+
+
+def set_volume(deck: str = "A", value: float = 1.0,
+               port: int | None = None) -> dict[str, Any]:
+    """Kanal-Fader eines Decks setzen (``value`` 0.0..1.0)."""
+    deck = deck.upper()
+    if deck not in ("A", "B"):
+        raise ValueError("nur Deck A/B haben einen Vol-Mapping")
+    return control_change(cc_number("vol_" + deck.lower()),
+                          to_midi_value(value), port=port)
+
+
+def set_xfader(value: float = 0.5, port: int | None = None) -> dict[str, Any]:
+    """Crossfader setzen (``value`` 0.0 = links, 1.0 = rechts)."""
+    return control_change(cc_number("xfader"), to_midi_value(value), port=port)
+
+
 # --- High-Level -------------------------------------------------------------
 
 def trigger(name: str, port: int | None = None) -> dict[str, Any]:
@@ -364,6 +462,7 @@ def status() -> dict[str, Any]:
     settings = settings_path()
     mapped = mapped_notes(settings)
     confirmed = confirmed_notes(settings)
+    ccs = mapped_ccs(settings)
     return {
         "channel": CHANNEL + 1,
         "default_port": DEFAULT_PORT,
@@ -372,6 +471,8 @@ def status() -> dict[str, Any]:
         "mapped": sorted(mapped),
         "confirmed": sorted(confirmed),
         "pending": sorted(set(COMMANDS) - confirmed),
+        "mapped_ccs": sorted(ccs),
+        "cc_names": {str(cc): name for cc, name in ccs.items()},
         "note": ("'mapped' kommt direkt aus der Traktor-Settings-.tsi. "
                  "Nur 'pending' ist noch nicht belegt."),
     }

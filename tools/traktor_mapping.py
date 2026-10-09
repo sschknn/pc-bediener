@@ -142,6 +142,60 @@ def existing_cmad(raw: bytes) -> bytes:
 #:   Wort 26 = 1        (Flag)
 HOTCUE_FIELDS = {9: 1, 20: -1, 22: 7, 26: 1}
 
+#: Werks-CMAD-Vorlagen fuer Mixer-Fader (controlId 5 = X-Fader, 102 = Volume).
+#: 1:1 aus dem DDJ-ERGO-Mapping: Interaction "Direct" (word2=3) mit
+#: Float-Werten (word11 = Vorgabewert). Ein Noten-Toggle-CMAD passt nicht.
+#: word3 (Deck) wird je Regel ueberschrieben.
+CC_XFADER, CC_VOLUME = 5, 102
+#: 30 int32, exakt wie in der Werksregel (Ch07.CC.*). Vom Skript ausgelesen.
+_CC_WORDS = {
+    CC_XFADER: [4, 1, 3, 0, 0, 0, 0, 1084227584, 0, 0, 2, 1056964608,
+                0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 1065353216, 0, 127, 0, 1, 2,
+                1031798784, 0],
+    CC_VOLUME: [4, 1, 3, 0, 0, 0, 0, 1084227584, 0, 0, 2, 1065353216,
+                0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 1065353216, 0, 127, 0, 1, 2,
+                1031798784, 0],
+}
+
+
+def build_cc(ctrl: int, deck: int) -> bytes:
+    """Direct-CMAD fuer einen Mixer-Fader aus der Werksvorlage."""
+    words = list(_CC_WORDS[ctrl])
+    words[3] = deck                      # word3 = Deck
+    b = struct.pack(">30i", *words)
+    assert len(b) == 120
+    return b
+
+
+#: controlId + Deck je Mixer-CC-Kommando (Namen wie in traktorbridge).
+CC_FIELDS = {
+    "vol_a": (CC_VOLUME, 0),
+    "vol_b": (CC_VOLUME, 1),
+    "xfader": (CC_XFADER, 0),
+}
+
+
+def _bridge_ccs() -> dict[int, str]:
+    """Importiert CC_COMMANDS aus traktorbridge (Nummer -> Slug)."""
+    src = Path(__file__).resolve().parents[1] / "src" / "pcbediener" / "modules" / "traktorbridge.py"
+    text = src.read_text(encoding="utf-8")
+    block = text.split("CC_COMMANDS: dict", 1)[1].split("}", 1)[0]
+    out: dict[int, str] = {}
+    for m in re.finditer(r'(\d+):\s*\("([^"]+)",\s*"([^"]+)"\)', block):
+        out[int(m.group(1))] = m.group(2)
+    if not out:
+        raise SystemExit("CC_COMMANDS nicht geparst")
+    return out
+
+
+def cc_plan() -> list[tuple[int, str, int, int]]:
+    """(cc, name, controlId, deck) fuer die Mixer-Fader."""
+    plan = []
+    for cc, name in sorted(_bridge_ccs().items()):
+        ctrl, deck = CC_FIELDS[name]
+        plan.append((cc, name, ctrl, deck))
+    return plan
+
 
 def build_cmad(template: bytes, interaction: int, deck: int, setvalue: int,
                extra: dict[int, int] | None = None) -> bytes:
@@ -159,15 +213,20 @@ def build(raw: bytes) -> bytes:
     template = existing_cmad(raw)
     if len(template) != 120:
         raise SystemExit(f"unerwartete CMAD-Groesse {len(template)}")
-    plan = mapping_plan()
-    cmas_content = struct.pack(">I", len(plan))
-    dcbm_content = struct.pack(">I", len(plan))
-    for i, (note, name, ctrl, inter, deck, setval) in enumerate(plan, start=1):
+    # (Bindungsname, controlId, CMAD) - Noten- und CC-Regeln in einer Tabelle.
+    entries: list[tuple[str, int, bytes]] = []
+    for note, name, ctrl, inter, deck, setval in mapping_plan():
         extra = HOTCUE_FIELDS if ctrl == HOTCUE else None
-        cmad = build_cmad(template, inter, deck, setval, extra)
+        entries.append((f"Ch01.Note.{note_name(note)}", ctrl,
+                        build_cmad(template, inter, deck, setval, extra)))
+    for cc, name, ctrl, deck in cc_plan():
+        entries.append((f"Ch01.CC.{cc:03d}", ctrl, build_cc(ctrl, deck)))
+
+    cmas_content = struct.pack(">I", len(entries))
+    dcbm_content = struct.pack(">I", len(entries))
+    for i, (nm, ctrl, cmad) in enumerate(entries, start=1):
         cmai = struct.pack(">II", i, 0) + struct.pack(">I", ctrl) + frame(b"CMAD", cmad)
         cmas_content += frame(b"CMAI", cmai)
-        nm = f"Ch01.Note.{note_name(note)}"
         # WICHTIG: Traktor liest die Bindungsnamen als UTF-16BE (verifiziert an
         # der funktionierenden play_a-Regel und an Werksmappings). Mit LE
         # verwirft Traktor die komplette DCBM-Tabelle lautlos.
@@ -191,10 +250,14 @@ def main() -> None:
     new = build(raw)
     print(f"alt: {len(raw)} bytes  ->  neu: {len(new)} bytes")
     plan = mapping_plan()
-    print(f"{len(plan)} Mappings:")
+    print(f"{len(plan)} Noten-Mappings:")
     for note, name, ctrl, inter, deck, setval in plan:
         print(f"  note {note:3d} {note_name(note):4s} {name:12s} "
               f"ctrl={ctrl:5d} inter={inter} deck={deck} set={setval}")
+    cplan = cc_plan()
+    print(f"{len(cplan)} CC-Mappings:")
+    for cc, name, ctrl, deck in cplan:
+        print(f"  cc   {cc:3d} Ch01.CC.{cc:03d} {name:12s} ctrl={ctrl:5d} deck={deck}")
     # Bindungsnamen gegen den Blob pruefen (muessen als UTF-16BE vorliegen).
     for note, *_ in plan:
         pat = f"Ch01.Note.{note_name(note)}".encode("utf-16-be")

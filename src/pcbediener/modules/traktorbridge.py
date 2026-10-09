@@ -194,7 +194,10 @@ def _walk_bindings(b: bytes, off: int, end: int) -> Iterator[tuple[int, str]]:
                 lb = p + 8
                 bid = struct.unpack(">I", b[lb:lb + 4])[0]
                 nl = struct.unpack(">I", b[lb + 4:lb + 8])[0]
-                name = b[lb + 8:lb + 8 + nl * 2].decode("utf-16-le", "replace")
+                # Traktor speichert die Bindungsnamen als UTF-16**BE** (verifiziert
+                # an Werksmappings und an der funktionierenden play_a-Regel). Mit
+                # LE gelesen kaeme hier nur Zeichensalat heraus.
+                name = b[lb + 8:lb + 8 + nl * 2].decode("utf-16-be", "replace")
                 yield bid, name
                 p += 8 + sz
 

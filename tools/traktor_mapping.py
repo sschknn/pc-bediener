@@ -8,7 +8,9 @@ lernt dieses Werkzeug die Zuordnungen *programmatisch* an.
 
 Format (reverse-engineered + aus Werksmappings verifiziert):
   Frame    : char[4] Id + uint32 BE size(content without 8-byte header)
-  String   : uint32 BE len + wchar_t[len] UTF-16LE (no NUL)
+  String   : uint32 BE len + wchar_t[len], UTF-16**BE** (no NUL).
+             Gilt fuer DEVI-Namen, DDCI/DDCO-"DCDT"-Eintraege UND die
+             DCBM-Bindungsnamen. Nur die CMAD-Comment-Zeichenkette ist LE.
   DIOM > DIOI + DEVS > DEVI(name) > DDAT > ... > DDCB > (CMAS + DCBM)
   CMAS     : int count + count * CMAI
   CMAI     : int bindingId + int type + int controlId + CMAD
@@ -17,6 +19,9 @@ Format (reverse-engineered + aus Werksmappings verifiziert):
                word3 = Deck (0=A,1=B,2=C,3=D)
                word11 = SetValueTo
   DCBM     : int count + count * (int id + string name)
+             Der id ist ein freier, geraetelokaler Schluessel; er muss nur
+             mit dem bindingId der zugehoerigen CMAI uebereinstimmen. Die
+             eigentliche Steuerung steckt im NAMEN (z. B. "Ch01.Note.C4").
 
 Die Vorlage ist das bereits funktionierende ``play_a``-Mapping; nur
 InteractionMode, Deck und SetValueTo werden ueberschrieben.
@@ -143,7 +148,10 @@ def build(raw: bytes) -> bytes:
         cmai = struct.pack(">II", i, 0) + struct.pack(">I", ctrl) + frame(b"CMAD", cmad)
         cmas_content += frame(b"CMAI", cmai)
         nm = f"Ch01.Note.{note_name(note)}"
-        leaf = struct.pack(">I", i) + struct.pack(">I", len(nm)) + nm.encode("utf-16-le")
+        # WICHTIG: Traktor liest die Bindungsnamen als UTF-16BE (verifiziert an
+        # der funktionierenden play_a-Regel und an Werksmappings). Mit LE
+        # verwirft Traktor die komplette DCBM-Tabelle lautlos.
+        leaf = struct.pack(">I", i) + struct.pack(">I", len(nm)) + nm.encode("utf-16-be")
         dcbm_content += frame(b"DCBM", leaf)
 
     ddcb = frame(b"DDCB", frame(b"CMAS", cmas_content) + frame(b"DCBM", dcbm_content))
@@ -167,9 +175,9 @@ def main() -> None:
     for note, name, ctrl, inter, deck, setval in plan:
         print(f"  note {note:3d} {note_name(note):4s} {name:12s} "
               f"ctrl={ctrl:5d} inter={inter} deck={deck} set={setval}")
-    # Bindungsnamen gegen den Blob pruefen (muessen als UTF-16 vorliegen).
+    # Bindungsnamen gegen den Blob pruefen (muessen als UTF-16BE vorliegen).
     for note, *_ in plan:
-        pat = f"Ch01.Note.{note_name(note)}".encode("utf-16-le")
+        pat = f"Ch01.Note.{note_name(note)}".encode("utf-16-be")
         assert pat in raw, f"Notenname fehlt im Blob: {note_name(note)}"
     print("alle Notennamen im Definitionsblob vorhanden.")
     if not apply_:

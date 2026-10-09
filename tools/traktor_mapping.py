@@ -23,8 +23,12 @@ Format (reverse-engineered + aus Werksmappings verifiziert):
              mit dem bindingId der zugehoerigen CMAI uebereinstimmen. Die
              eigentliche Steuerung steckt im NAMEN (z. B. "Ch01.Note.C4").
 
-Die Vorlage ist das bereits funktionierende ``play_a``-Mapping; nur
-InteractionMode, Deck und SetValueTo werden ueberschrieben.
+Als Vorlage dient das bereits funktionierende ``play_a``-Mapping; nur
+InteractionMode, Deck und SetValueTo werden ueberschrieben. **Ausnahme
+Hotcue:** hier wird eine Werks-Hotcue-Regel als Vorlage benutzt, weil eine
+"hold+value"-Zuordnung zusaetzlich den Wertebereich (min/max) und Flags
+traegt. Ein aus ``play_a`` geklonter CMAD (Bereich 0..1 statt -1..7) wurde von
+Traktor zwar geladen, aber nicht ausgewertet - der Hotcue blieb wirkungslos.
 """
 from __future__ import annotations
 
@@ -128,11 +132,26 @@ def existing_cmad(raw: bytes) -> bytes:
     return raw[s + 8:s + 8 + size]
 
 
-def build_cmad(template: bytes, interaction: int, deck: int, setvalue: int) -> bytes:
+#: Werksdateien mit Hotcue-Regeln sind teils noch im 116-Byte-Format; in
+#: Traktor 4 (120 Byte) unterscheidet sich eine Hotcue-Regel von unserer
+#: play_a-Vorlage nur in vier Woertern. Werte aus einer echten Traktor-4-
+#: Werksregel (Pioneer DDJ-ERGO, controlId 2328) verifiziert:
+#:   Wort  9 = 1        (Flag "hat Wert")
+#:   Wort 20 = -1       (Wertebereich min)
+#:   Wort 22 = 7        (Wertebereich max)  -> Bereich -1..7 = HotCue 1..8
+#:   Wort 26 = 1        (Flag)
+HOTCUE_FIELDS = {9: 1, 20: -1, 22: 7, 26: 1}
+
+
+def build_cmad(template: bytes, interaction: int, deck: int, setvalue: int,
+               extra: dict[int, int] | None = None) -> bytes:
     b = bytearray(template)
     struct.pack_into(">i", b, 8, interaction)
     struct.pack_into(">i", b, 12, deck)
     struct.pack_into(">i", b, 44, setvalue)
+    if extra:
+        for word, value in extra.items():
+            struct.pack_into(">i", b, word * 4, value)
     return bytes(b)
 
 
@@ -144,7 +163,8 @@ def build(raw: bytes) -> bytes:
     cmas_content = struct.pack(">I", len(plan))
     dcbm_content = struct.pack(">I", len(plan))
     for i, (note, name, ctrl, inter, deck, setval) in enumerate(plan, start=1):
-        cmad = build_cmad(template, inter, deck, setval)
+        extra = HOTCUE_FIELDS if ctrl == HOTCUE else None
+        cmad = build_cmad(template, inter, deck, setval, extra)
         cmai = struct.pack(">II", i, 0) + struct.pack(">I", ctrl) + frame(b"CMAD", cmad)
         cmas_content += frame(b"CMAI", cmai)
         nm = f"Ch01.Note.{note_name(note)}"

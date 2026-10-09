@@ -76,6 +76,12 @@ DEFAULT_PORT = int(os.environ.get("PCB_TRAKTOR_MIDI_PORT", "1"))
 #: :data:`VELOCITY` gesendet und direkt mit Note-Off beantwortet.
 _PULSE_S = 0.05
 
+#: Noten, deren Traktor-Kommando den Interaktionsmodus **Hold** verlangt
+#: (nur so zugelassen): die Hot Cues (Command 2328 "Select/Set+Store Hotcue").
+#: Gemessen: mit 50 ms passiert nichts, mit 350 ms wird der Marker gesetzt.
+HOLD_NOTES: frozenset[int] = frozenset({36, 37, 38, 39, 40, 41, 42, 43})
+_HOLD_S = 0.35
+
 
 # --- Kommandoregister -------------------------------------------------------
 
@@ -262,11 +268,15 @@ def _short(handle: Any, msg: int) -> int:
 
 
 def note_on(note: int, channel: int = CHANNEL, velocity: int = VELOCITY,
-            port: int | None = None) -> dict[str, Any]:
+            port: int | None = None, hold: float | None = None) -> dict[str, Any]:
     """Sendet ein Note-On/Note-Off-Paar (Tastendruck mit Loslassen).
 
     Das Off ist wichtig: bei Interaction Mode *Hold* feuert Traektor sonst
     dauerhaft, und die Bruecke wuerde den naechsten Befehl verschlucken.
+
+    ``hold`` ist die Haltedauer in Sekunden. Ohne Angabe wird fuer
+    :data:`HOLD_NOTES` (Hot Cues) automatisch :data:`_HOLD_S` verwendet -
+    ein zu kurzer Puls wird von Traktors "Hold"-Interaktion ignoriert.
     """
     if not 0 <= note <= 127:
         raise ValueError(f"note muss 0..127 sein, war {note}")
@@ -281,7 +291,9 @@ def note_on(note: int, channel: int = CHANNEL, velocity: int = VELOCITY,
         if rc_on != 0:
             raise RuntimeError(f"Note-On abgelehnt (rc={rc_on})")
         import time
-        time.sleep(_PULSE_S)
+        if hold is None:
+            hold = _HOLD_S if note in HOLD_NOTES else _PULSE_S
+        time.sleep(hold)
         rc_off = _short(handle, status | (note << 8))
         if rc_off != 0:
             raise RuntimeError(f"Note-Off abgelehnt (rc={rc_off})")

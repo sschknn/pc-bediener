@@ -21,6 +21,8 @@ captures/
 logs/
 
 --- Skript-Artefakte ---
+# Arbeits-/Debug-Ordner (Screenshots, Einmal-Skripte) - nicht ins Repo.
+tmp/
 # Skripte, die %TEMP% als literalen Ordnernamen angelegt haben (die
 # Umgebungsvariable wurde nicht expandiert). Faellt regelmaessig auf.
 %TEMP%/

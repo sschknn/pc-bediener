@@ -27,7 +27,10 @@ class FakePyAutoGUI:
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
         self.position_at = (100, 200)
         self.size_at = (1920, 1080)
+        self.keys_down: list[str] = []
         self.image = None  # wird von Bedarf gesetzt
+        self.locate_region = None
+        self.locate_result = None
 
     # -- Maus ------------------------------------------------------------
     def size(self) -> tuple[int, int]:
@@ -57,6 +60,15 @@ class FakePyAutoGUI:
     def hscroll(self, clicks: int, **_):
         self.calls.append(("hscroll", (clicks,), {}))
 
+    def keyDown(self, key: str, **_):  # noqa: N802
+        self.calls.append(("keyDown", (key,), {}))
+        self.keys_down.append(key)
+
+    def keyUp(self, key: str, **_):  # noqa: N802
+        self.calls.append(("keyUp", (key,), {}))
+        if key in self.keys_down:
+            self.keys_down.remove(key)
+
     # -- Tastatur --------------------------------------------------------
     def write(self, text: str, interval=0.0, **_):
         self.calls.append(("write", (text,), {"interval": interval}))
@@ -72,8 +84,12 @@ class FakePyAutoGUI:
         self.calls.append(("screenshot", (region,), {}))
         return self.image
 
-    def locateCenterOnScreen(self, image, confidence=None, grayscale=False, **_):  # noqa: N802
-        self.calls.append(("locate", (image,), {"confidence": confidence, "grayscale": grayscale}))
+    def locateCenterOnScreen(self, image, confidence=None, grayscale=False,  # noqa: N802
+                             region=None, **_):
+        self.calls.append(("locate", (image,), {"confidence": confidence,
+                                                "grayscale": grayscale,
+                                                "region": region}))
+        self.locate_region = region
         return getattr(self, "locate_result", None)
 
     # -- Testhilfen ------------------------------------------------------
@@ -94,8 +110,13 @@ def fake_gui(monkeypatch) -> FakePyAutoGUI:
     Cursor des Users auf dem Desktop herum. Weil die Verifikation danach
     aus der Attrappe liest, stimmen die Koordinaten sonst nicht überein und
     die Tests schlagen mit einer irreführenden UIPI-Meldung fehl.
+
+    ``vision._grab`` wird auf die Attrappe umgeleitet: es bevorzugt Pillows
+    ``ImageGrab(all_screens=True)``, weil nur das negative Koordinaten und
+    mehrere Monitore abdeckt – auf einem echten Desktop würde ein Screenshot-
+    Test sonst den Bildschirm des Nutzers abgreifen.
     """
-    from pcbediener.modules import gui
+    from pcbediener.modules import gui, vision
 
     fake = FakePyAutoGUI()
     monkeypatch.setattr(gui, "_pyautogui", lambda: fake)
@@ -103,6 +124,12 @@ def fake_gui(monkeypatch) -> FakePyAutoGUI:
     monkeypatch.setattr(
         gui, "_hard_set_cursor",
         lambda x, y, pg, cfg=None: pg.moveTo(x, y),
+    )
+    monkeypatch.setattr(gui, "virtual_metrics", lambda: (0, 0, *fake.size_at))
+    monkeypatch.setattr(
+        vision, "_grab",
+        lambda region=None: (
+            fake.screenshot(region=region), "pyautogui"),
     )
     return fake
 

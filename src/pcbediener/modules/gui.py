@@ -25,6 +25,78 @@ _SPECIAL_KEYS = {
     "f10", "f11", "f12", "insert", "printscreen", "win", "cmd", "command",
 }
 
+#: Virtual-Konstanten des virtuellen Desktops. Auf einem Multi-Monitor-Setup
+#: ist der primäre Monitor **nicht** der Ursprung: ``SM_XVIRTUALSCREEN`` ist
+#: negativ, sobald ein Monitor links steht. Ohne diese Werte lehnte
+#: :func:`move_mouse` jede negative Koordinate ab – auf einem Rechner mit einem
+#: Monitor links vom Hauptmonitor war damit *kein* Fenster auf diesem Bildschirm
+#: anklickbar.
+_SM_XVIRTUALSCREEN = 76
+_SM_YVIRTUALSCREEN = 77
+_SM_CXVIRTUALSCREEN = 78
+_SM_CYVIRTUALSCREEN = 79
+
+#: VirtualKey-Codes der Modifikatortasten (Win32-VK_*-Werte).
+MODIFIER_VK: dict[str, int] = {
+    "shift": 0x10,
+    "ctrl": 0x11,
+    "control": 0x11,
+    "alt": 0x12,
+    "altgr": 0x12,
+    "win": 0x5B,
+    "cmd": 0x5B,
+    "command": 0x5B,
+}
+
+
+def normalise_modifiers(modifiers: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    """Bringt eine Modifier-Angabe in eine geprüfte, kanonische Liste.
+
+    Akzeptiert ``"ctrl"``, ``"ctrl+shift"``, ``["ctrl", "shift"]`` und
+    ``None``. Unbekannte Namen sind ein Fehler – ein stillschweigend
+    ignorierter Tastendruck ist bei ``Ctrl``-Feinabstimmung genau die Art
+    Fehler, die man am Bildschirm nicht sieht.
+    """
+    if modifiers is None:
+        return []
+    if isinstance(modifiers, str):
+        parts = modifiers.replace(",", "+").split("+")
+    else:
+        parts = [str(p) for p in modifiers]
+    out: list[str] = []
+    for raw in parts:
+        name = raw.strip().lower()
+        if not name:
+            continue
+        if name not in MODIFIER_VK:
+            raise ValueError(
+                f"Unbekannte Modifier-Taste {raw!r}. Möglich: "
+                + ", ".join(sorted(set(MODIFIER_VK)))
+            )
+        canonical = "ctrl" if name == "control" else ("win" if name in ("cmd", "command") else name)
+        if canonical not in out:
+            out.append(canonical)
+    return out
+
+
+def virtual_metrics() -> tuple[int, int, int, int] | None:
+    """``(links, oben, breite, hoehe)`` des virtuellen Desktops.
+
+    ``None``, wenn Win32 nicht verfügbar ist (nicht-Windows, Tests) – dann
+    greifen die Aufrufer auf die pyautogui-Werte zurück.
+    """
+    try:
+        u = ctypes.windll.user32
+        left = int(u.GetSystemMetrics(_SM_XVIRTUALSCREEN))
+        top = int(u.GetSystemMetrics(_SM_YVIRTUALSCREEN))
+        width = int(u.GetSystemMetrics(_SM_CXVIRTUALSCREEN))
+        height = int(u.GetSystemMetrics(_SM_CYVIRTUALSCREEN))
+    except (AttributeError, OSError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return (left, top, width, height)
+
 
 def _pyautogui():
     """Lazy-Import von pyautogui mit verständlicher Fehlermeldung."""
@@ -72,10 +144,34 @@ class WindowInfo:
 # --- Maus -------------------------------------------------------------------
 
 
-def screen_size() -> dict[str, int]:
-    """Auflösung des primären Bildschirms."""
+def screen_size() -> dict[str, Any]:
+    """Auflösung aller Bildschirme (primär **und** virtueller Desktop).
+
+    ``width``/``height`` sind bewusst die Masse des **virtuellen** Desktops,
+    nicht die des primären Monitors: Koordinaten in allen Tools sind
+    Bildschirm-Koordinaten, und auf einem Setup mit einem Monitor links vom
+    Hauptmonitor beginnt der Desktop bei x = -1920. Wer dort mit den
+    primären 1920 px rechnet, kann jedes Fenster auf dem zweiten Monitor nicht
+    erreichen.
+    """
     size = _pyautogui().size()
-    return {"width": int(size[0]), "height": int(size[1])}
+    out: dict[str, Any] = {
+        "width": int(size[0]),
+        "height": int(size[1]),
+        "primary_width": int(size[0]),
+        "primary_height": int(size[1]),
+    }
+    metrics = virtual_metrics()
+    if metrics is not None:
+        left, top, width, height = metrics
+        out.update(
+            width=width,
+            height=height,
+            x=left,
+            y=top,
+            multi_monitor=(width, height) != (int(size[0]), int(size[1])),
+        )
+    return out
 
 
 def mouse_position() -> dict[str, int]:
@@ -84,19 +180,31 @@ def mouse_position() -> dict[str, int]:
     return {"x": int(pos[0]), "y": int(pos[1])}
 
 
+def _desktop_rect() -> tuple[int, int, int, int]:
+    """Rechteck, gegen das Maus-Koordinaten geprüft werden."""
+    metrics = virtual_metrics()
+    if metrics is not None:
+        return metrics
+    size = _pyautogui().size()
+    return (0, 0, int(size[0]), int(size[1]))
+
+
 def move_mouse(x: int, y: int, cfg: Config, duration: float = 0.0) -> dict[str, Any]:
     """Bewegt die Maus absolut auf (x, y).
 
     ``duration`` > 0 animiert die Bewegung, was bei Drag-Drop oft realistischer
-    von UI-Automationen akzeptiert wird.
+    von UI-Automationen akzeptiert wird. Gültig ist der gesamte virtuelle
+    Desktop, also auch negative Koordinaten auf einem Monitor links vom
+    Hauptmonitor.
     """
-    pg = _pyautogui()
-    width, height = pg.size()
-    if not (0 <= x < width and 0 <= y < height):
+    left, top, width, height = _desktop_rect()
+    if not (left <= x < left + width and top <= y < top + height):
         raise ValueError(
-            f"Koordinate ({x}, {y}) liegt außerhalb des Bildschirms ({width}x{height})"
+            f"Koordinate ({x}, {y}) liegt außerhalb des virtuellen Desktops "
+            f"({left},{top}) {width}x{height}. Negative x/y sind erlaubt – "
+            "sie gehören zu einem Monitor links/oben vom Hauptmonitor."
         )
-    pg.moveTo(x, y, duration=duration)
+    _pyautogui().moveTo(x, y, duration=duration)
     return {"moved_to": {"x": int(x), "y": int(y)}}
 
 
@@ -176,9 +284,24 @@ _MOUSEEVENTF_RIGHTDOWN = 0x0008
 _MOUSEEVENTF_RIGHTUP = 0x0010
 _MOUSEEVENTF_MIDDLEDOWN = 0x0020
 _MOUSEEVENTF_MIDDLEUP = 0x0040
+_MOUSEEVENTF_WHEEL = 0x0800
+_MOUSEEVENTF_HWHEEL = 0x1000
+_MOUSEEVENTF_VIRTUALDESK = 0x4000
 _MOUSEEVENTF_ABSOLUTE = 0x8000
+_MOUSEEVENTF_MOVE_NOCOALESCE = 0x2000
+
+#: Feinste Unterteilung, die SendInput für Mausbewegungen meldet (dx/dy als
+#: 16-Bit-Festkomma über den *virtuellen* Desktop). 3840/65536 ≈ 0,059 px –
+#: feiner geht es nicht, und genau daran scheitert „nur 1 px bewegen".
+_ABS_STEPS_PER_PX = 65536 / 3840
+
+#: Delta pro Mausrad-Rastung (Win32-Konvention WHEEL_DELTA).
+WHEEL_DELTA = 120
 
 _SENDINPUT_MOUSE = 0
+_SENDINPUT_KEYBOARD = 1
+
+_KEYEVENTF_KEYUP = 0x0002
 
 _BUTTON_EVENTS = {
     "left": (_MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP),
@@ -195,8 +318,14 @@ class _MouseInput(ctypes.Structure):
                 ("time", ctypes.c_ulong), ("dwExtraInfo", _PUL)]
 
 
+class _KeyboardInput(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                ("dwExtraInfo", _PUL)]
+
+
 class _InputI(ctypes.Union):
-    _fields_ = [("mi", _MouseInput)]
+    _fields_ = [("mi", _MouseInput), ("ki", _KeyboardInput)]
 
 
 class _Input(ctypes.Structure):
@@ -209,7 +338,40 @@ def _to_windows_coordinates(x: int, y: int, width: int, height: int) -> tuple[in
             (int(y) * 65536) // max(1, height) + 1)
 
 
-def _send_mouse_flags(flags: int, dx: int = 0, dy: int = 0) -> int:
+def _to_virtual_coordinates(x: int, y: int) -> tuple[int, int]:
+    """Pixel -> normalisierte Absolut-Koordinaten des *virtuellen* Desktops.
+
+    Anders als :func:`_to_windows_coordinates` wird der Offset des
+    virtuellen Desktops abgezogen, damit auch negative Bildschirmkoordinaten
+    (Monitor links vom Hauptmonitor) korrekt adressiert werden - und der Wert
+    landet mittig in seinem 16-Bit-Fach (Begruendung in ``_center``).
+    """
+    metrics = virtual_metrics()
+    if metrics is None:
+        return _to_windows_coordinates(
+            x, y, *_primary_size())
+    left, top, width, height = metrics
+
+    def _center(pixel: int, origin: int, span: int) -> int:
+        # Mittig im 16-Bit-Fach statt auf der Untergrenze: Windows bildet mit
+        # ``floor`` zurueck, und auf 3840 px virtueller Breite ist ein Fach nur
+        # 0,06 px breit - die Untergrenze landete im Live-Test reproduzierbar
+        # 1 px daneben (x = -1150 kam als -1151 an). Mittig kann das nicht.
+        offset = pixel - origin
+        bucket = 65536 // max(1, span)
+        value = (offset * 65536) // max(1, span) + bucket // 2
+        return max(0, min(65535, value))
+
+    return (_center(int(x), left, width), _center(int(y), top, height))
+
+
+def _primary_size() -> tuple[int, int]:
+    size = _pyautogui().size()
+    return (int(size[0]), int(size[1]))
+
+
+def _send_mouse_flags(flags: int, dx: int = 0, dy: int = 0,
+                      mouse_data: int = 0) -> int:
     """Ein SendInput-Maus-Event; gibt die Zahl übernommener Events zurück."""
     try:
         send_input = ctypes.windll.user32.SendInput
@@ -217,25 +379,152 @@ def _send_mouse_flags(flags: int, dx: int = 0, dy: int = 0) -> int:
         raise RuntimeError("SendInput nur unter Windows verfügbar") from exc
     extra = ctypes.c_ulong(0)
     union = _InputI()
-    union.mi = _MouseInput(dx, dy, 0, flags, 0, ctypes.pointer(extra))
+    # mouseData ist ein *signed* DWORD (Mausrad-Delta ist negativ für
+    # "nach unten"); als c_ulong maskiert, damit ctypes nicht meckert.
+    union.mi = _MouseInput(dx, dy, mouse_data & 0xFFFFFFFF, flags, 0,
+                           ctypes.pointer(extra))
     packet = _Input(ctypes.c_ulong(_SENDINPUT_MOUSE), union)
     return int(send_input(1, ctypes.pointer(packet), ctypes.sizeof(packet)))
 
 
-def sendinput_move(x: int, y: int) -> dict[str, Any]:
-    """Bewegt die Maus per SendInput (absolut, Hardware-Ebene)."""
+def _send_key_vk(vk: int, up: bool = False) -> int:
+    """Ein SendInput-Tastatur-Event über den Virtual-Key-Code."""
     try:
-        metrics = ctypes.windll.user32.GetSystemMetrics
+        send_input = ctypes.windll.user32.SendInput
     except (AttributeError, OSError) as exc:
         raise RuntimeError("SendInput nur unter Windows verfügbar") from exc
-    nx, ny = _to_windows_coordinates(x, y, metrics(0), metrics(1))
-    sent = _send_mouse_flags(_MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE, nx, ny)
+    extra = ctypes.c_ulong(0)
+    union = _InputI()
+    union.ki = _KeyboardInput(vk, 0, _KEYEVENTF_KEYUP if up else 0, 0,
+                              ctypes.pointer(extra))
+    packet = _Input(ctypes.c_ulong(_SENDINPUT_KEYBOARD), union)
+    return int(send_input(1, ctypes.pointer(packet), ctypes.sizeof(packet)))
+
+
+def cursor_position() -> tuple[int, int]:
+    """Echte Cursor-Position direkt von Win32 (``GetCursorPos``)."""
+    class _Point(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    point = _Point()
+    try:
+        ok = ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+    except (AttributeError, OSError):
+        pg = _pyautogui().position()
+        return (int(pg[0]), int(pg[1]))
+    if not ok:
+        pg = _pyautogui().position()
+        return (int(pg[0]), int(pg[1]))
+    return (int(point.x), int(point.y))
+
+
+def sendinput_move(x: int, y: int) -> dict[str, Any]:
+    """Bewegt die Maus per SendInput (absolut, Hardware-Ebene) **und prüft nach**.
+
+    Die reine Absolut-Formel reicht nicht. Empirisch gemessen auf einem
+    2-Monitor-Setup (virtueller Desktop ``-1920,0 3840x1297``, siehe
+    ``tools/verify_mouse.py``) landeten absolute Koordinaten regelmäßig **1 px
+    daneben** – mal links, mal rechts, ohne erkennbares Muster. Ursache:
+    Windows bildet ``MOUSEEVENTF_ABSOLUTE`` nicht linear über den ganzen
+    virtuellen Desktop ab, sondern pro Monitor mit eigener Rundung.
+
+    Deshalb wird nach dem Setzen mit ``GetCursorPos`` gegengemessen und ein
+    Restfehler per *relativer* Korrektur behoben. Ein 1-px-relativer Impuls
+    ist exakt und wird von der Zielanwendung auch als Bewegung registriert –
+    im Gegensatz zu einem weiteren Absolutversuch, der es nur anders falsch
+    macht. Ergebnis enthält ``residual_px`` (0 = pixelgenau gelandet).
+    """
+    nx, ny = _to_virtual_coordinates(x, y)
+    sent = _send_mouse_flags(
+        _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK,
+        nx, ny,
+    )
     if sent != 1:
         raise RuntimeError(
             "SendInput-Bewegung abgelehnt – Eingabe blockiert "
             "(abweichende Integritätsstufe/UIPI?)"
         )
-    return {"moved_to": {"x": int(x), "y": int(y)}, "method": "sendinput"}
+
+    actual = cursor_position()
+    for _ in range(3):
+        dx, dy = int(x) - actual[0], int(y) - actual[1]
+        if not dx and not dy:
+            break
+        if max(abs(dx), abs(dy)) <= 4:
+            _send_mouse_flags(
+                _MOUSEEVENTF_MOVE | _MOUSEEVENTF_MOVE_NOCOALESCE, dx, dy)
+        else:
+            # Weit daneben: noch einmal absolut. Kommt praktisch nicht vor,
+            # aber ein Monitor-Ausschalten mitten in der Aktion könnte das
+            # Rechteck verschieben.
+            nx, ny = _to_virtual_coordinates(x, y)
+            _send_mouse_flags(
+                _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE
+                | _MOUSEEVENTF_VIRTUALDESK, nx, ny)
+        actual = cursor_position()
+
+    return {
+        "moved_to": {"x": int(x), "y": int(y)},
+        "actual": {"x": actual[0], "y": actual[1]},
+        "residual_px": {"x": int(x) - actual[0], "y": int(y) - actual[1]},
+        "method": "sendinput",
+    }
+
+
+def sendinput_move_relative(dx: int, dy: int) -> dict[str, Any]:
+    """Bewegt die Maus **relativ** um (dx, dy) Pixel.
+
+    Der entscheidende Weg für Drehregler: :func:`sendinput_move` setzt eine
+    absolute Position an, und jeder einzelne SendInput-Aufruf wird vom
+    Windows/Panel geglättet. Ein relativer, in viele Einzelimpulse
+    aufgeteilter Weg erzeugt genau die Ereignisflut, die ein FL-Studio-Regler
+    als "Ziehen" erkennt – auch wenn die Zielkoordinate ausserhalb des
+    Bildschirms liegt (der Cursor wandert dabei aus dem Fenster und zurück).
+    """
+    try:
+        ctypes.windll.user32.mouse_event  # noqa: B018 - Verfügbarkeitsprüfung
+    except (AttributeError, OSError) as exc:
+        raise RuntimeError("SendInput nur unter Windows verfügbar") from exc
+    sent = _send_mouse_flags(
+        _MOUSEEVENTF_MOVE | _MOUSEEVENTF_MOVE_NOCOALESCE, int(dx), int(dy))
+    if sent != 1:
+        raise RuntimeError(
+            "SendInput-Relativbewegung abgelehnt – Eingabe blockiert "
+            "(abweichende Integritätsstufe/UIPI?)"
+        )
+    return {"moved_by": {"x": int(dx), "y": int(dy)}, "method": "sendinput"}
+
+
+def sendinput_key(modifier: str, up: bool = False) -> int:
+    """Drückt/lässt eine Modifikatortaste per SendInput los."""
+    name = (modifier or "").strip().lower()
+    if name not in MODIFIER_VK:
+        raise ValueError(f"Unbekannte Modifier-Taste: {modifier!r}")
+    sent = _send_key_vk(MODIFIER_VK[name], up)
+    if sent != 1:
+        raise RuntimeError("SendInput-Tastendruck abgelehnt (UIPI?)")
+    return sent
+
+
+def sendinput_scroll(clicks: int, horizontal: bool = False) -> dict[str, Any]:
+    """Scrollt per SendInput (Mausrad mit korrektem Vorzeichen)."""
+    if clicks == 0:
+        return {"scrolled": 0, "method": "sendinput", "events": 0}
+    flag = _MOUSEEVENTF_HWHEEL if horizontal else _MOUSEEVENTF_WHEEL
+    sent = 0
+    for _ in range(abs(int(clicks))):
+        # Konvention wie pyautogui: positive clicks = "nach oben".
+        # WM_MOUSEWHEEL meldet "nach vorne" (= nach oben) als positives Delta.
+        delta = WHEEL_DELTA if clicks > 0 else -WHEEL_DELTA
+        sent += _send_mouse_flags(flag, mouse_data=delta)
+        time.sleep(0.01)
+    if sent != abs(int(clicks)):
+        raise RuntimeError(
+            f"SendInput übernahm {sent}/{abs(int(clicks))} Rad-Events – "
+            "Eingabe blockiert (UIPI?)"
+        )
+    return {"scrolled": int(clicks), "horizontal": horizontal,
+            "method": "sendinput", "events": sent}
 
 
 def sendinput_click(
@@ -244,28 +533,44 @@ def sendinput_click(
     button: Button = "left",
     clicks: int = 1,
     interval: float = 0.1,
+    hold_ms: int = 0,
+    modifiers: list[str] | None = None,
 ) -> dict[str, Any]:
     """Klickt per SendInput – Fallback, wenn pyautogui-Klicks ignoriert werden.
 
     ``SendInput`` meldet zurück, wie viele Events übernommen wurden; wird
     weniger übernommen als gesendet, scheitert der Aufruf *laut* statt still
     (der häufigste Grund für „Klick wirkt nicht" bei Spielen/FL Studio).
+
+    ``hold_ms`` hält die Taste zwischen runter/los gedrückt – ohne diesen
+    Parameter wurde ``hold_ms`` im SendInput-Modus früher komplett ignoriert.
+    ``modifiers`` (``ctrl``/``shift``/``alt``/``win``) wird um den gesamten
+    Klick herunter- und wieder losgelassen.
     """
     if button not in _BUTTON_EVENTS:
         raise ValueError(f"Unbekannte Maustaste: {button}")
     if clicks < 1 or clicks > 5:
         raise ValueError("clicks muss zwischen 1 und 5 liegen")
+    if hold_ms < 0:
+        raise ValueError("hold_ms muss >= 0 sein")
+    mods = normalise_modifiers(modifiers)
     if x is not None and y is not None:
         sendinput_move(x, y)
     down, up = _BUTTON_EVENTS[button]
     sent = 0
-    for _ in range(clicks):
-        sent += _send_mouse_flags(down)
-        time.sleep(0.01)
-        sent += _send_mouse_flags(up)
-        if interval:
-            time.sleep(interval)
-    expected = clicks * 2
+    for mod in mods:
+        sent += sendinput_key(mod)
+    try:
+        for _ in range(clicks):
+            sent += _send_mouse_flags(down)
+            time.sleep(hold_ms / 1000 if hold_ms else 0.01)
+            sent += _send_mouse_flags(up)
+            if interval and clicks > 1:
+                time.sleep(interval)
+    finally:
+        for mod in reversed(mods):
+            sent += sendinput_key(mod, up=True)
+    expected = clicks * 2 + 2 * len(mods)
     if sent != expected:
         raise RuntimeError(
             f"SendInput übernahm {sent}/{expected} Events – Eingabe blockiert "
@@ -273,6 +578,74 @@ def sendinput_click(
         )
     pos = {"x": int(x), "y": int(y)} if x is not None and y is not None else mouse_position()
     return {"clicked": pos, "button": button, "clicks": clicks,
+            "hold_ms": hold_ms, "modifiers": mods,
+            "method": "sendinput", "events": sent}
+
+
+def sendinput_drag(
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    steps: int = 24,
+    duration_ms: int = 240,
+    button: Button = "left",
+    modifiers: list[str] | None = None,
+) -> dict[str, Any]:
+    """Zieht per SendInput in ``steps`` Einzelimpulsen.
+
+    Warum relativ und nicht absolut: Ein FL-Studio-Regler wertet die
+    *Zwischenbewegung* aus. Setzt man nur die Endposition, wird vom Panel
+    genau ein Sprung gesehen und der Regler bleibt stehen. Deshalb wird die
+    Strecke in viele kleine Impulse zerlegt, jeder mit eigener Wartezeit, und
+    der Cursor wandert zwischendurch durchaus aus dem Fenster heraus – das
+    ist genau das Verhalten einer echten Hand.
+    """
+    if steps < 1:
+        raise ValueError("steps muss >= 1 sein")
+    if duration_ms < 0:
+        raise ValueError("duration_ms muss >= 0 sein")
+    if button not in _BUTTON_EVENTS:
+        raise ValueError(f"Unbekannte Maustaste: {button}")
+    mods = normalise_modifiers(modifiers)
+
+    sendinput_move(x1, y1)
+    time.sleep(0.03)
+    down, up = _BUTTON_EVENTS[button]
+    sent = 0
+    expected = 2 + 2 * len(mods)
+    for mod in mods:
+        sent += sendinput_key(mod)
+    try:
+        sent += _send_mouse_flags(down)
+        time.sleep(0.02)
+        per_step = (duration_ms / 1000) / steps if steps else 0.0
+        # divmod() statt round(): auch beinegativen Strecken summieren sich die
+        # Einzelschritte exakt auf die Ziellinie (kein Rundungsfehler von ±1 px).
+        base_x, rem_x = divmod(int(x2) - int(x1), steps)
+        base_y, rem_y = divmod(int(y2) - int(y1), steps)
+        for i in range(steps):
+            step_dx = base_x + (1 if i < rem_x else 0)
+            step_dy = base_y + (1 if i < rem_y else 0)
+            if step_dx or step_dy:
+                sent += _send_mouse_flags(
+                    _MOUSEEVENTF_MOVE | _MOUSEEVENTF_MOVE_NOCOALESCE,
+                    step_dx, step_dy)
+                expected += 1
+            if per_step:
+                time.sleep(per_step)
+    finally:
+        sent += _send_mouse_flags(up)
+        for mod in reversed(mods):
+            sent += sendinput_key(mod, up=True)
+    if sent != expected:
+        raise RuntimeError(
+            f"SendInput übernahm {sent}/{expected} Drag-Events – Eingabe "
+            "blockiert (UIPI/Secure Desktop?) oder der Pfad wurde abgebrochen."
+        )
+    return {"from": {"x": int(x1), "y": int(y1)},
+            "to": {"x": int(x2), "y": int(y2)},
+            "button": button, "steps": steps, "modifiers": mods,
             "method": "sendinput", "events": sent}
 
 
@@ -307,6 +680,7 @@ def click(
     exact: bool = False,
     mode: str = "pyautogui",
     hold_ms: int = 0,
+    modifiers: str | list[str] | None = None,
 ) -> dict[str, Any]:
     """Klickt robust – auch bei Programmen, die synthetische Klicks ignorieren.
 
@@ -332,6 +706,10 @@ def click(
             Fallback nach PyDirectInput-Art, wenn Klicks ignoriert werden).
         hold_ms: Taste so viele ms gedrückt halten (langsamer Klick, z.B.
             für FL-Studios Tempo-Slider, die auf Drag statt Klick reagieren).
+        modifiers: Zusätzlich gedrückte Tasten, z.B. ``"ctrl"`` oder
+            ``["ctrl", "shift"]``. In FL Studio ist das **Alt+Linksklick =
+            Reset auf Default** und **Ctrl+Drag = Feinabstimmung** – ohne
+            diesen Parameter war beides nicht bedienbar.
     """
     if button not in ("left", "right", "middle"):
         raise ValueError(f"Unbekannte Maustaste: {button}")
@@ -341,11 +719,17 @@ def click(
         raise ValueError(f"Unbekannter Klick-Modus {mode!r}: 'pyautogui' oder 'sendinput'")
     if hold_ms < 0:
         raise ValueError("hold_ms muss >= 0 sein")
+    mods = normalise_modifiers(modifiers)
 
+    where = f"bei ({x}, {y})" if x is not None else ""
+    if window:
+        where += f" im Fenster {window!r}"
     if cfg is not None:
         require_confirm(
-            confirm, cfg, f"{clicks}x {button}-Klick",
-            f"bei ({x}, {y})" + (f" im Fenster {window!r}" if window else "") if x is not None else "",
+            confirm, cfg,
+            f"{clicks}x {button}-Klick"
+            + (f" mit {'+'.join(mods)}" if mods else ""),
+            where,
         )
 
     activation: dict[str, Any] | None = None
@@ -354,7 +738,7 @@ def click(
         activation = activate(hwnd)
 
     if mode == "sendinput":
-        result = sendinput_click(x, y, button, clicks, interval)
+        result = sendinput_click(x, y, button, clicks, interval, hold_ms, mods)
         return {**result, "target_window": window, "activation": activation}
 
     pg = _pyautogui()
@@ -372,32 +756,45 @@ def click(
                 "Alternative: mode='sendinput'."
             )
 
-    if hold_ms > 0:
-        # Langsamer Klick für Slider/Regler, die kurze Klicks ignorieren.
-        for _ in range(clicks):
-            pg.mouseDown(button=button)
-            time.sleep(hold_ms / 1000)
-            pg.mouseUp(button=button)
-            if interval:
-                time.sleep(interval)
-        return {
-            "clicked": {"x": int(pg.position()[0]), "y": int(pg.position()[1])},
-            "button": button,
-            "clicks": clicks,
-            "hold_ms": hold_ms,
-            "target_window": window,
-            "activation": activation,
-        }
+    # Modifikatoren VOR der Maustaste drücken – Windows meldet die
+    # Tastenlage an die Anwendung, sonst sieht z.B. ein Ctrl-Klick aus wie ein
+    # Klick ohne Ctrl.
+    for mod in mods:
+        pg.keyDown(mod)
+    try:
+        if hold_ms > 0:
+            # Langsamer Klick für Slider/Regler, die kurze Klicks ignorieren.
+            for _ in range(clicks):
+                pg.mouseDown(button=button)
+                time.sleep(hold_ms / 1000)
+                pg.mouseUp(button=button)
+                if interval:
+                    time.sleep(interval)
+            return {
+                "clicked": {"x": int(pg.position()[0]), "y": int(pg.position()[1])},
+                "button": button,
+                "clicks": clicks,
+                "hold_ms": hold_ms,
+                "modifiers": mods,
+                "target_window": window,
+                "activation": activation,
+            }
 
-    pg.click(
-        x=x, y=y, button=button, clicks=clicks, interval=interval,
-        duration=0 if cfg is None else cfg.click_delay_ms / 1000,
-    )
+        pg.click(
+            x=x, y=y, button=button, clicks=clicks, interval=interval,
+            duration=0 if cfg is None else cfg.click_delay_ms / 1000,
+        )
+    finally:
+        # Auch bei Fehlern loslassen – eine hängengebliebene Ctrl-Taste
+        # "klebt" am Desktop und verdreht danach jede weitere Eingabe.
+        for mod in reversed(mods):
+            pg.keyUp(mod)
 
     return {
         "clicked": {"x": int(pg.position()[0]), "y": int(pg.position()[1])},
         "button": button,
         "clicks": clicks,
+        "modifiers": mods,
         "target_window": window,
         "activation": activation,
     }
@@ -421,17 +818,59 @@ def mouse_up(button: Button = "left") -> dict[str, Any]:
 def drag(
     x1: int, y1: int, x2: int, y2: int, cfg: Config | None = None,
     duration: float = 0.5, button: Button = "left", steps: int = 1,
+    mode: str = "pyautogui", modifiers: str | list[str] | None = None,
+    window: str | None = None, exact: bool = False, confirm: bool = False,
 ) -> dict[str, Any]:
     """Zieht von (x1, y1) nach (x2, y2).
 
     ``steps`` > 1 fährt die Strecke in Zwischenpunkten ab (glatter Drag nach
     AutoHotkey-Art) – manche Slider (z.B. FL-Studio-Regler) werten nur
     bewegte, gedrückte Maus aus und ignorieren Sprünge.
+
+    ``mode="sendinput"`` ist für sture Programme die bessere Wahl: dort wird
+    die Strecke als Serie relativer Einzelimpulse gesendet, die das Ziel als
+    echtes Ziehen erkennt. ``modifiers="ctrl"`` liefert die FL-Studio-
+    Feinabstimmung, ``window="FL Studio"`` holt das Ziel vorher in den
+    Vordergrund (ohne Fokus ignorieren besonders Panel-Fenster jeden Klick).
     """
     if steps < 1:
         raise ValueError("steps muss >= 1 sein")
+    if duration < 0:
+        raise ValueError("duration muss >= 0 sein")
+    if mode not in ("pyautogui", "sendinput"):
+        raise ValueError(
+            f"Unbekannter Drag-Modus {mode!r}: 'pyautogui' oder 'sendinput'"
+        )
+    if button not in ("left", "right", "middle"):
+        raise ValueError(f"Unbekannte Maustaste: {button}")
+    mods = normalise_modifiers(modifiers)
+
+    if cfg is not None:
+        require_confirm(
+            confirm, cfg,
+            f"Drag ({x1},{y1}) -> ({x2},{y2}) mit {button}"
+            + (f" und {'+'.join(mods)}" if mods else ""),
+            f"im Fenster {window!r}" if window else "",
+        )
+
+    activation: dict[str, Any] | None = None
+    if window:
+        activation = activate(find_window(window, exact))  # frisch auflösen
+
+    if mode == "sendinput":
+        result = sendinput_drag(
+            x1, y1, x2, y2,
+            steps=steps if steps > 1 else 24,
+            duration_ms=int(duration * 1000),
+            button=button,
+            modifiers=mods,
+        )
+        return {**result, "target_window": window, "activation": activation}
+
     pg = _pyautogui()
     pg.moveTo(x1, y1)
+    for mod in mods:
+        pg.keyDown(mod)
     pg.mouseDown(button=button)
     try:
         if steps == 1:
@@ -445,20 +884,149 @@ def drag(
                 )
     finally:
         pg.mouseUp(button=button)  # auch bei Fehlern loslassen
+        for mod in reversed(mods):
+            pg.keyUp(mod)
     return {"from": {"x": x1, "y": y1}, "to": {"x": x2, "y": y2},
-            "button": button, "steps": steps}
+            "button": button, "steps": steps, "modifiers": mods,
+            "method": "pyautogui", "target_window": window,
+            "activation": activation}
 
 
-def scroll(clicks: int, x: int | None = None, y: int | None = None, horizontal: bool = False, cfg: Config | None = None) -> dict[str, Any]:
-    """Scrollt. Positive ``clicks`` scrollen nach oben/rechts."""
+def scroll(
+    clicks: int, x: int | None = None, y: int | None = None,
+    horizontal: bool = False, cfg: Config | None = None,
+    mode: str = "pyautogui", modifiers: str | list[str] | None = None,
+    window: str | None = None, exact: bool = False, interval: float = 0.0,
+) -> dict[str, Any]:
+    """Scrollt. Positive ``clicks`` scrollen nach oben/rechts.
+
+    Der Mauszeiger wird bewusst **nicht** zwangsweise bewegt: FL-Studio-
+    Regler reagieren auf das Mausrad nur unter dem Cursor, deshalb ist
+    ``x``/``y`` hier der eigentliche Kniff – vorher dorthin setzen, dann
+    scrollen. ``modifiers="ctrl"`` verfeinert in vielen Panels die Schrittweite.
+    """
+    if mode not in ("pyautogui", "sendinput"):
+        raise ValueError(
+            f"Unbekannter Scroll-Modus {mode!r}: 'pyautogui' oder 'sendinput'"
+        )
+    mods = normalise_modifiers(modifiers)
+
+    activation: dict[str, Any] | None = None
+    if window:
+        activation = activate(find_window(window, exact))
+    if x is not None and y is not None:
+        move_mouse(x, y, cfg) if cfg is not None else _pyautogui().moveTo(x, y)
+
+    if mode == "sendinput":
+        result = sendinput_scroll(clicks, horizontal)
+        return {**result, "modifiers": mods, "position": mouse_position(),
+                "target_window": window, "activation": activation}
+
     pg = _pyautogui()
-    if cfg is not None and x is not None and y is not None:
-        move_mouse(x, y, cfg)
-    if horizontal:
-        pg.hscroll(clicks)
+    for mod in mods:
+        pg.keyDown(mod)
+    try:
+        if interval:
+            for _ in range(abs(clicks)):
+                if horizontal:
+                    pg.hscroll(1 if clicks > 0 else -1)
+                else:
+                    pg.scroll(1 if clicks > 0 else -1)
+                time.sleep(interval)
+        elif horizontal:
+            pg.hscroll(clicks)
+        else:
+            pg.scroll(clicks)
+    finally:
+        for mod in reversed(mods):
+            pg.keyUp(mod)
+    return {"scrolled": clicks, "horizontal": horizontal, "modifiers": mods,
+            "method": "pyautogui", "target_window": window,
+            "activation": activation}
+
+
+def knob(
+    x: int, y: int, cfg: Config | None = None,
+    delta_px: int = 0, clicks: int = 0,
+    fine: bool = False, no_snap: bool = False, reset: bool = False,
+    axis: Literal["vertical", "horizontal"] = "vertical",
+    steps: int = 24, duration: float = 0.35,
+    mode: str = "pyautogui", window: str | None = None, exact: bool = False,
+    confirm: bool = False, settle_ms: int = 350,
+) -> dict[str, Any]:
+    """Dreht bzw. bedient einen **Drehregler/Slider** (Knob) an (x, y).
+
+    Das ist der Werkzeugkasten für FL-Studio-Regler, weil dort genau die
+    drei Bedienweisen existieren, die kein einzelnes ``mouse_drag`` abdeckt:
+
+    * ``delta_px``  – vertikaler (bzw. horizontaler) Zug. ``positive
+      delta_px`` hebt den Wert. ``fine=True`` hält dabei **Ctrl** gedrückt
+      (FL: Feinabstimmung), ``no_snap=True`` hält **Shift** (FL: Rastpunkte
+      wie „Default" nicht einhalten).
+    * ``clicks``    – Mausrad über dem Regler. Positiv = aufwärts.
+      Absolut reproduzierbar, weil FL jedem Rad eine feste Schrittweite
+      gibt – ideal, wenn ein Wert *exakt* mehrmals verändert werden soll.
+    * ``reset=True`` – **Alt** + Linksklick: FL setzt den Regler auf seinen
+      Defaultwert zurück. Der zuverlässigste Einzelschritt überhaupt.
+
+    Ohne ``window`` wird der Regler *wo auch immer* auf dem Bildschirm
+    bedient. Mit ``window="FL Studio"`` wird das Fenster vorher in den
+    Vordergrund und in den Tastatur-Fokus geholt – Panel-Fenster wie
+    Mixer oder ein geöffnetes Plugin ignorieren sonst jeden Klick, weil ihr
+    Eingabefokus woanders liegt.
+    """
+    if delta_px == 0 and clicks == 0 and not reset:
+        raise ValueError(
+            "Nichts zu tun: delta_px, clicks oder reset=True angeben."
+        )
+    if abs(clicks) > 100:
+        raise ValueError("clicks muss zwischen -100 und 100 liegen")
+    if axis not in ("vertical", "horizontal"):
+        raise ValueError(
+            f"Unbekannte Achse {axis!r}: 'vertical' oder 'horizontal'"
+        )
+
+    mods: list[str] = []
+    if no_snap:
+        mods.append("shift")
+
+    actions: list[dict[str, Any]] = []
+    if reset:
+        # Alt muss VOR dem Klick gedrückt sein – FL prüft die Tastenlage
+        # beim MouseDown, nicht beim MouseUp.
+        actions.append(
+            click(x, y, cfg, button="left", confirm=confirm, window=window,
+                  exact=exact, mode=mode, modifiers=["alt"] + mods)
+        )
+    elif clicks != 0:
+        actions.append(
+            scroll(clicks, x, y, cfg=cfg, mode=mode,
+                   modifiers=(["ctrl"] if fine else []) + mods,
+                   window=window, exact=exact)
+        )
     else:
-        pg.scroll(clicks)
-    return {"scrolled": clicks, "horizontal": horizontal}
+        # Vertikaler Regler: Wert steigt bei Zug nach oben. Horizontaler
+        # Regler (Fader): Wert steigt bei Zug nach rechts.
+        if axis == "vertical":
+            end = (x, y - delta_px)
+        else:
+            end = (x + delta_px, y)
+        actions.append(
+            drag(x, y, end[0], end[1], cfg, duration=duration, steps=steps,
+                 mode=mode,
+                 modifiers=(["ctrl"] if fine else []) + mods,
+                 window=window, exact=exact, confirm=confirm)
+        )
+    # Kurzes Settling: FL zeichnet den Regler erst nach dem Loslassen neu.
+    if settle_ms:
+        time.sleep(settle_ms / 1000)
+    return {
+        "knob": {"x": int(x), "y": int(y)},
+        "requested": {"delta_px": delta_px, "clicks": clicks, "reset": reset,
+                      "fine": fine, "no_snap": no_snap, "mode": mode},
+        "actions": actions,
+        "final_position": mouse_position(),
+    }
 
 
 # --- Tastatur ---------------------------------------------------------------

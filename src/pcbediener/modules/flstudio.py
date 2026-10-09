@@ -131,6 +131,72 @@ RECIPES = {
     ),
 }
 
+# --- Drehregler / Knobs / Slider (amtliche Image-Line-Doku) --------------------
+#
+# Quelle: image-line.com/fl-studio-learning/fl-studio-online-manual/
+#         html/basics_interface.htm  -> Abschnitt "Knobs & sliders"
+#         sowie html/basics_shortcuts.htm
+#
+# Das ist das Wichtigste für GUI-Automation, weil FL **keine** API zum Setzen
+# von Plugin-Parametern hat (siehe SCRIPT_API_FACTS) – die Maus ist der
+# einzige Weg. Und die Maus braucht exakt diese Modifikatoren:
+#
+#   Wert ändern          Linksklick auf den Regler und **vertikal ziehen**
+#                        (horizontal bei waagerechten Reglern)
+#   Wert exakt eintippen  Rechtsklick auf den Regler -> "Type in value"
+#   Feinabstimmung        **Ctrl** während des Ziehens gedrückt halten
+#                        (alternativ beide Maustasten gedrückt halten)
+#   Rastpunkte aus       **Shift** während des Tweaks
+#   Reset auf Default    **Alt** + Linksklick (bzw. Mittelklick bei
+#                        3-Tasten-Maus)
+#   Automation verlinken  Rechtsklick -> Link-Optionen / "last tweaked"
+#
+# Warum das im MCP so wichtig ist: ohne `modifiers` in mouse_drag/click war
+# keine dieser Varianten überhaupt bedienbar – ein Regler liess sich nur
+# ungenau verschieben, nie auf einen bekannten Wert setzen oder zurücksetzen.
+KNOB_FACTS = {
+    "ziehen": "Linksklick auf den Regler + vertikaler Zug (oben = höher)",
+    "exakter_wert": "Rechtsklick -> 'Type in value' (deterministisch!)",
+    "fein": "Ctrl + Zug  (alternativ beide Maustasten gedrückt)",
+    "kein_snap": "Shift + Zug (Rastpunkte wie Default werden ignoriert)",
+    "reset": "Alt + Linksklick (oder Mittelklick) -> Defaultwert",
+    "rad": "Mausrad über dem Regler aendert den Wert in fester Schrittweite",
+    "werteinheit": "0-100 %, 0-1 oder kontextabhaengig (dB); Typing erlaubt die Wahl",
+    "auslesen": "Hint-Bar (TFLHintBarForm) zeigt Name+Wert beim Hover; per Screenshot lesen",
+    "api": "plugins.setParamValue existiert NICHT - Maus ist der einzige Weg",
+}
+
+#: Fensterraster des FL-Hauptfensters: ``(x, y, breite, hoehe)``. Alle
+#: Werkzeug-Koordinaten sind relativ dazu – anders als absolute Zahlen
+#: bleibt das über Monitorwechsel und Fenstergrössen hinweg gültig.
+#: Nur Beispieldaten aus einer realen Sitzung (1920x1200 Fenster).
+FL_WINDOW_SIZE_EXAMPLE = (1920, 1200)
+
+#: Rechteck der Hint-Bar am unteren Fensterrand, relativ zum FL-Hauptfenster.
+#: Dort schreibt FL beim Hover "Parameter  -  Wert in Einheit"; das ist der
+#: einzige Ort, an dem sich ein Regler-Wert ohne Plugin-spezifisches OCR
+#: auslesen lässt.
+HINT_BAR_REL = (0, 1150, 900, 50)
+
+
+def hint_bar_rect(window_rect: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """Absolute Hint-Bar-Rechtecke für ein FL-Hauptfenster.
+
+    Args:
+        window_rect: ``(links, oben, breite, hoehe)`` des Hauptfensters,
+            z.B. von :func:`pcbediener.modules.gui.list_windows`.
+
+    Returns:
+        ``(links, oben, breite, hoehe)`` in Desktop-Koordinaten – direkt als
+        ``screenshot(region=...)`` verwendbar.
+    """
+    left, top, width, height = window_rect
+    rel = HINT_BAR_REL
+    bar_height = rel[3]
+    return (left + rel[0], top + max(0, height - (FL_WINDOW_SIZE_EXAMPLE[1] - rel[1])),
+            min(rel[2], width), min(bar_height, height))
+
+
 # --- Script-output-Interpreter (FL 26.1, empirisch ermittelt) ------------------
 #
 # VIEW > "Script output" ist eine eingedockte Seite von FLs Hauptfenster
@@ -223,6 +289,38 @@ RECIPES_STALE = (
 )
 
 RECIPES.update({
+    # --- Drehregler ------------------------------------------------------
+    "drehregler_genau_setzen": (
+        "Drei Wege, absteigend nach Verlaesslichkeit:\n"
+        "1) window_set_text / mouse_knob(reset=True): Alt+Linksklick auf den "
+        "Regler setzt ihn auf den Defaultwert (100% zuverlaessig).\n"
+        "2) Rechtsklick auf den Regler -> 'Type in value' -> Zahl tippen. "
+        "Deterministisch, weil der Dialog den Wert als Text annimmt.\n"
+        "3) mouse_knob(delta_px=N) = vertikaler Zug mit N Pixeln. Ungenau: FL "
+        "rundet und rastet ein. Mit fine=True (Ctrl) ~4x feiner; no_snap=True "
+        "(Shift) hebt die Rastpunkte auf.\n"
+        "IMMER window='FL Studio' angeben - Panel-Fenster (Mixer, geoeffnetes "
+        "Plugin) verwerfen jeden Klick ohne Eingabefokus."
+    ),
+    "drehregler_wert_auslesen": (
+        "Maus ueber den Regler halten (mouse_move), ~0.4 s warten, dann "
+        "screenshot(region=flstudio.hint_bar_rect(...)). Die Hint-Bar zeigt "
+        "'Parameter - Wert in Einheit'. Der Wert-Dialog 'Type in value' "
+        "anzeigen und ablesen ist ebenfalls moeglich, aber blockiert das "
+        "Hauptfenster bis zum Schliessen."
+    ),
+    "drehregler_warum_keine_api": (
+        "FLs Python-API kann Mixer-Tempo, Pattern-Laenge, Kanaele, Playlist-"
+        "Spurnamen - aber KEINE Plugin-Parameter. plugins.setParamValue gibt "
+        "es nicht. Deshalb ist der Mausweg fuer Regler der einzige Weg, und "
+        "er braucht zwingend die Modifier (ctrl/alt/shift)."
+    ),
+    "regler_klicks_statt_drag": (
+        "mouse_knob(clicks=5) scrollt 5 Rastungen ueber dem Regler. FL gibt "
+        "jeder Rastung dieselbe Schrittweite, das Ergebnis ist damit "
+        "reproduzierbar - ein Drag ueber N Pixel ist es nicht. Fuer "
+        "wiederholbare Vergleiche (A/B eines Filters) deshalb clicks nutzen."
+    ),
     # Tempo ueber die API statt ueber MIDI-Import: kein Neben effect, der
     # Clips an der Wiedergabeposition zerstoert.
     "set_tempo_api": (

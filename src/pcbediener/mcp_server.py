@@ -24,8 +24,10 @@ from . import __version__, runtime
 from .modules import appmemory as mod_appmem
 from .modules import exec as mod_exec
 from .modules import files as mod_files
-from .modules import flstudio as mod_flstudio
-from .modules import gui as mod_gui
+from .modules import flstudio as mod_flstudio
+from .modules import flbridge as mod_flbridge
+from .modules import traktorbridge as mod_traktor
+from .modules import gui as mod_gui
 from .modules import proc as mod_proc
 from .modules import vision as mod_vision
 from .modules import background as mod_bg
@@ -58,6 +60,33 @@ Arbeitsweise:
    (app_rule_set bei Erfolg, app_rule_break bei Fehlschlag). Nur verifizierte
    Wege benutzen – nie wiederholen, was unter avoid/broken steht.
 
+Maus und Drehregler (die wichtigste Falle der GUI-Automation):
+ 10. Koordinaten sind Desktop-Koordinaten und dürfen NEGATIV sein (Monitor links
+     vom Hauptmonitor). screen_info() liefert x/y/width/height des virtuellen
+     Desktops - niemals gegen die primäre Auflösung rechnen.
+ 11. Bei jedem Klick/Drag/Scroll in eine Anwendung IMMER window="<Titel>"
+     angeben. Das löst das Handle frisch auf und erzwingt Vordergrund +
+     Tastatur-Fokus. Panel-Fenster (Mixer, geöffnete Plugins) verwerfen Klicks
+     ohne Fokus lautlos - sie tun so, als wäre nichts passiert.
+ 12. Reagiert ein Klick trotzdem nicht, mode="sendinput" verwenden
+     (Hardware-Ebene, PyDirectInput-Art). Bei mouse_drag zusätzlich steps hoch-
+     setzen (z.B. 24): nur eine Serie von Zwischenbewegungen zählt als Ziehen,
+     ein Sprung auf die Endposition nicht.
+ 13. Für Drehregler/Slider (FL Studio, Plugins, jeder Editor) mouse_knob(x, y,
+     ...) benutzen statt blind mouse_drag:
+       * delta_px > 0 = nach oben ziehen (Wert steigt), negativ = abwärts
+       * clicks     = Mausrad über dem Regler (reproduzierbar, feste Schrittweite)
+       * reset=True = Alt+Linksklick = Reset auf den Defaultwert (FL Studio)
+       * fine=True   = Ctrl = Feinabstimmung, no_snap=True = Shift = ohne Rastpunkte
+     Belege und weitere Rezepte: flstudio_info().
+ 14. Nach jeder Regler-Änderung VERIFIZIEREN, sonst ist das Ergebnis ein
+     Rätsel: Maus über den Regler halten (mouse_move), ~0.4 s warten, dann
+     screenshot(region=...) und den Wert lesen. FL Studio zeigt ihn im Tooltip
+     bzw. in der Hint-Bar.
+ 15. Drehregler lassen sich nicht auslesen - kein Rückgabewert enthält den
+     Wert. Deshalb Soll-Ist-Schleife: Zielwert merken, ändern, Screenshot
+     prüfen, bei Abweichung mit kleinerem delta_px nachfassen.
+
 LLM-Fallback-System:
 - vision_model() zeigt die aktuelle Fallback-Kette (model_chain) + Status aller
   Modelle. Ein Modell mit Fehlern (Rate Limit, Quota, Credits) wird automatisch
@@ -71,8 +100,8 @@ LLM-Fallback-System:
 
 Sicherheit:
 - Destruktive Aktionen (exec_*, file_delete, file_write, file_move, process_kill,
-  process_start, mouse_click) verlangen confirm=True, solange safety_mode
-  "confirm" ist. Die Sperrliste in safety.py gilt immer, auch bei "auto".
+  process_start, mouse_click, mouse_drag) verlangen confirm=True, solange
+  safety_mode "confirm" ist. Die Sperrliste in safety.py gilt immer, auch bei "auto".
 - Dateizugriffe sind auf die Pfade in safety_status() begrenzt.
 - Erkläre in einem kurzen Satz, was eine riskante Aktion bewirken würde, bevor
   du confirm=True setzt.
@@ -310,35 +339,38 @@ def mouse_move(x: int, y: int, duration: float = 0.0) -> dict[str, Any]:
     return mod_gui.move_mouse(x, y, runtime.get_config(), duration)
 
 
-@server.tool(
-    annotations=WRITE,
-    description=(
-        "Modul B: Klickt robust – auch bei Programmen, die einfache synthetische "
-        "Klicks ignorieren (z.B. FL Studio). Mit 'window' wird das Zielfenster vorher "
-        "FRISCH aufgelöst und in den Vordergrund+ Fokus gezwungen; danach wird die "
-        "echte Cursor-Position verifiziert und ein blockierter Klick als Fehler "
-        "gemeldet statt still zu scheitern. Gib bei Dialogs immer 'window' an. "
-        "mode='sendinput' nutzt SendInput auf Hardware-Ebene (PyDirectInput-Art) "
-        "als Fallback; hold_ms hält die Taste gedrückt (für Slider/Regler)."
-    ),
-)
-@guard
-def mouse_click(
-    x: int | None = None,
-    y: int | None = None,
-    button: str = "left",
-    clicks: int = 1,
-    confirm: bool = False,
-    window: str | None = None,
-    exact: bool = False,
-    mode: str = "pyautogui",
-    hold_ms: int = 0,
-) -> dict[str, Any]:
-    return mod_gui.click(
-        x, y, runtime.get_config(), button, clicks,
-        confirm=confirm, window=window, exact=exact,
-        mode=mode, hold_ms=hold_ms,
-    )
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Klickt robust – auch bei Programmen, die einfache synthetische "
+        "Klicks ignorieren (z.B. FL Studio). Mit 'window' wird das Zielfenster vorher "
+        "FRISCH aufgelöst und in den Vordergrund+ Fokus gezwungen; danach wird die "
+        "echte Cursor-Position verifiziert und ein blockierter Klick als Fehler "
+        "gemeldet statt still zu scheitern. Gib bei Dialogs immer 'window' an. "
+        "mode='sendinput' nutzt SendInput auf Hardware-Ebene (PyDirectInput-Art) "
+        "als Fallback; hold_ms hält die Taste gedrückt (für Slider/Regler).\n"
+        "modifiers hält Zusatztasten: in FL Studio bewirkt modifiers='alt' + "
+        "Linksklick den Reset eines Reglers auf seinen Defaultwert."
+    ),
+)
+@guard
+def mouse_click(
+    x: int | None = None,
+    y: int | None = None,
+    button: str = "left",
+    clicks: int = 1,
+    confirm: bool = False,
+    window: str | None = None,
+    exact: bool = False,
+    mode: str = "pyautogui",
+    hold_ms: int = 0,
+    modifiers: str | list[str] | None = None,
+) -> dict[str, Any]:
+    return mod_gui.click(
+        x, y, runtime.get_config(), button, clicks,
+        confirm=confirm, window=window, exact=exact,
+        mode=mode, hold_ms=hold_ms, modifiers=modifiers,
+    )
 
 
 @server.tool(
@@ -401,85 +433,310 @@ def window_modal_state(title: str, exact: bool = False) -> dict[str, Any]:
     return mod_gui.modal_state(title, exact)
 
 
-@server.tool(
-    annotations=READ_ONLY,
-    description=(
-        "Anwendungs-Wissen FL Studio: Fensterklassen, Fenster-IDs (widMixer=0, "
-        "widChannelRack=1, widPlaylist=2, ...), Shortcuts (F5 Playlist, F9 Mixer, "
-        "Alt+F8 Browser), MIDI-Scripting-Ablage (device_*.py) und Rezepte "
-        "(Tempo setzen, Audio importieren, Modal-Dialoge)."
-    ),
-)
-@guard
-def flstudio_info() -> dict[str, Any]:
-    return {
-        "window_classes": mod_flstudio.WINDOW_CLASSES,
-        "wid": {
-            "mixer": mod_flstudio.WID_MIXER,
-            "channel_rack": mod_flstudio.WID_CHANNEL_RACK,
-            "playlist": mod_flstudio.WID_PLAYLIST,
-            "piano_roll": mod_flstudio.WID_PIANO_ROLL,
-            "browser": mod_flstudio.WID_BROWSER,
-        },
-        "shortcuts": {
-            "playlist": mod_flstudio.SHORTCUT_PLAYLIST,
-            "channel_rack": mod_flstudio.SHORTCUT_CHANNEL_RACK,
-            "piano_roll": mod_flstudio.SHORTCUT_PIANO_ROLL,
-            "mixer": mod_flstudio.SHORTCUT_MIXER,
-            "browser": mod_flstudio.SHORTCUT_BROWSER,
-        },
-        "midi_scripting": {
-            "hardware_subdir": list(mod_flstudio.HARDWARE_SUBDIR),
-            "device_prefix": mod_flstudio.DEVICE_PREFIX,
-            "api_modules": list(mod_flstudio.API_MODULES),
-        },
-        "toolbar_hints": [
-            {"x": x, "y": y, "hint": hint}
-            for x, y, hint in mod_flstudio.TOOLBAR_HINTS
-        ],
-        "recipes": dict(mod_flstudio.RECIPES),
-    }
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "FL-Bruecke: Listet MIDI-Ports und den Status des Antwortkanals. "
+        "Voraussetzung fuer fl_command ist ein loopMIDI-Port (Prio 1) und ein "
+        "FL-MIDI-Geraet 'pcbediener Bridge' (Prio 2). Pruefe das ZUERST - "
+        "ohne Zuweisung bleiben alle Befehle wirkungslos und FL ignoriert sie "
+        "lautlos."
+    ),
+)
+@guard
+def fl_listen(start_receiver: bool = False, port: int | None = None) -> dict[str, Any]:
+    """Port-Übersicht und Antwortkanal."""
+    result = mod_flbridge.midi_ports()
+    result["receiver_open"] = mod_flbridge._receiver is not None
+    if start_receiver:
+        try:
+            result["receiver"] = mod_flbridge.start_receiving(port)
+        except Exception as exc:
+            result["receiver_error"] = str(exc)
+    return result
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "FL-Bruecke: Sendet PING an ALLE MIDI-Ausgaenge und meldet, welche "
+        "Nummer antworten. Nuetzlich, weil Windows 10/11 ueber WinMM keine "
+        "Port-Namen mehr liefert - FL identifiziert sich dadurch selbst."
+    ),
+)
+@guard
+def fl_probe(command: str = "PING") -> dict[str, Any]:
+    return mod_flbridge.probe_ports(command)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "FL-Bruecke: Wartet bis zu timeout_s Sekunden auf eine Antwort von "
+        "FL. Voraussetzung: fl_listen(start_receiver=True)."
+    ),
+)
+@guard
+def fl_receive(timeout_s: float = 3.0) -> dict[str, Any]:
+    return mod_flbridge.receive(timeout_s)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "FL-Bruecke (Prio 1): Schickt einen Befehl an FL Studios Skript-Engine "
+        "und holt die Antwort. DAS IST DER WEG, FL zu steuern - die Maus ist "
+        "der teure Weg (VCL-Popup-Schaltflaechen schlucken Klicks, Pixel "
+        "lügen). Jeder Befehl wird quittiert, also weisst du immer, ob er "
+        "wirklich angekommen ist.\n"
+        "Befehle: PING | VERSION | TEMPO [bpm] | CHANNELS | PATTERN [nr takte] | "
+        "PLAY | STOP | POS [tick] | MIXVOL [spur wert] | MIXPAN [spur wert] | "
+        "EVAL <python-ausdruck> | HILFE\n"
+        "Beispiele: 'TEMPO 140', 'MIXVOL 0 0.8', "
+        "'EVAL mixer.getTrackVolume(0)'.\n"
+        "EVAL filtert import/open/exec/os./subprocess - FL selbst blockt "
+        "Datei- und Systemzugriff ohnehin."
+    ),
+)
+@guard
+def fl_command(
+    command: str, port: int | None = None, channel: int = 0
+) -> dict[str, Any]:
+    return mod_flbridge.send(command, port, channel)
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Anwendungs-Wissen FL Studio: Fensterklassen, Fenster-IDs (widMixer=0, "
+        "widChannelRack=1, widPlaylist=2, ...), Shortcuts (F5 Playlist, F9 Mixer, "
+        "F8 Plugin-Picker), MIDI-Scripting-Ablage (device_*.py), die Regler/"
+        "Knob-Programmierung (welche Modifikatortaste welche Wirkung hat) und "
+        "Rezepte (Tempo setzen, Audio importieren, Modal-Dialoge).\n"
+        "Vor jeder FL-Automation aufrufen - die Knob-Fakten sind der Schlüssel "
+        "zu mouse_knob."
+    ),
+)
+@guard
+def flstudio_info() -> dict[str, Any]:
+    return {
+        "window_classes": mod_flstudio.WINDOW_CLASSES,
+        "wid": {
+            "mixer": mod_flstudio.WID_MIXER,
+            "channel_rack": mod_flstudio.WID_CHANNEL_RACK,
+            "playlist": mod_flstudio.WID_PLAYLIST,
+            "piano_roll": mod_flstudio.WID_PIANO_ROLL,
+            "browser": mod_flstudio.WID_BROWSER,
+        },
+        "shortcuts": {
+            "playlist": mod_flstudio.SHORTCUT_PLAYLIST,
+            "channel_rack": mod_flstudio.SHORTCUT_CHANNEL_RACK,
+            "piano_roll": mod_flstudio.SHORTCUT_PIANO_ROLL,
+            "mixer": mod_flstudio.SHORTCUT_MIXER,
+            "browser": mod_flstudio.SHORTCUT_BROWSER,
+            "pluglist": mod_flstudio.SHORTCUT_PLUGLIST,
+        },
+        "knobs": {
+            "facts": dict(mod_flstudio.KNOB_FACTS),
+            "hint_bar_rel": list(mod_flstudio.HINT_BAR_REL),
+        },
+        "script_api_facts": dict(mod_flstudio.SCRIPT_API_FACTS),
+        "stale_pixels": mod_flstudio.RECIPES_STALE,
+        "midi_scripting": {
+            "hardware_subdir": list(mod_flstudio.HARDWARE_SUBDIR),
+            "device_prefix": mod_flstudio.DEVICE_PREFIX,
+            "api_modules": list(mod_flstudio.API_MODULES),
+        },
+        "toolbar_hints": [
+            {"x": x, "y": y, "hint": hint}
+            for x, y, hint in mod_flstudio.TOOLBAR_HINTS
+        ],
+        "recipes": dict(mod_flstudio.RECIPES),
+    }
+
+
+# ===========================================================================
+# Traktor-Bruecke (MIDI-Kommando-Kanal)
+# ===========================================================================
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Traktor-Bruecke: MIDI-Ports, aktive Settings-.tsi und die dort WIRKLICH "
+        "gemappten Kommandos (direkt aus der Datei gelesen, nicht geraten). "
+        "Zuerst pruefen - ohne Mapping ignoriert Traktor jede Note lautlos."
+    ),
+)
+@guard
+def traktor_status() -> dict[str, Any]:
+    return mod_traktor.status()
+
+
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Traktor-Bruecke: Alle Kommandos (Note, Name, Deck) mit Mapping-Flag. "
+        "Zeigt, welche Noten Traktor kennt und welche noch offen sind."
+    ),
+)
+@guard
+def traktor_commands() -> dict[str, Any]:
+    mapped = mod_traktor.confirmed_notes()
+    return {
+        "channel": mod_traktor.CHANNEL + 1,
+        "default_port": mod_traktor.DEFAULT_PORT,
+        "mapped": sorted(mapped),
+        "pending": sorted(set(mod_traktor.COMMANDS) - set(mapped)),
+        "commands": [
+            {"note": note, "name": name, "description": desc, "deck": deck,
+             "mapped": note in mapped}
+            for note, (name, desc, deck) in sorted(mod_traktor.COMMANDS.items())
+        ],
+    }
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Traktor-Bruecke: Loest ein Kommando per Name aus - z. B. 'play_a', "
+        "'play_b', 'cue_a', 'sync_a', 'hotcue_a1', 'load_a'. Das ist der "
+        "bevorzugte Weg, Traktor zu bedienen (Note statt Mausklick). Sendet "
+        "Note-On und direkt danach Note-Off."
+    ),
+)
+@guard
+def traktor_trigger(name: str, port: int | None = None) -> dict[str, Any]:
+    return mod_traktor.trigger(name, port=port)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Traktor-Bruecke: Sendet eine rohe MIDI-Note (0..127), channel 0-basiert "
+        "(0 = 'Ch01'). Fuer Zuordnungen, die nicht im Kommando-Register stehen."
+    ),
+)
+@guard
+def traktor_note(
+    note: int, channel: int = 0, velocity: int = 127, port: int | None = None
+) -> dict[str, Any]:
+    return mod_traktor.note_on(note, channel=channel, velocity=velocity, port=port)
+
+
+@server.tool(
+    annotations=WRITE,
+    description="Traktor-Bruecke: Play/Pause eines Decks ('A'..'D').",
+)
+@guard
+def traktor_play(deck: str = "A", port: int | None = None) -> dict[str, Any]:
+    return mod_traktor.play(deck, port=port)
+
+
+@server.tool(
+    annotations=WRITE,
+    description="Traktor-Bruecke: Hot Cue 1..8 eines Decks ('A'..'D') ausloesen.",
+)
+@guard
+def traktor_hot_cue(deck: str, index: int, port: int | None = None) -> dict[str, Any]:
+    return mod_traktor.hot_cue(deck, index, port=port)
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Zieht von (x1, y1) nach (x2, y2) – für Drag & Drop und für "
+        "Slider/Knobs.\n"
+        "steps>1 fährt in Zwischenpunkten; mode='sendinput' sendet die Strecke als "
+        "Serie relativer Einzelimpulse (nötig für Programme, die absolute Sprünge "
+        "ignorieren).\n"
+        "modifiers='ctrl'/'shift'/'alt' hält Tasten während des Zugs (in FL Studio: "
+        "Ctrl = Feinabstimmung, Shift = Rastpunkte aus).\n"
+        "window=<Titel> holt das Ziel vorher in den Vordergrund+Fokus."
+    ),
+)
+@guard
+def mouse_drag(
+    x1: int, y1: int, x2: int, y2: int, button: str = "left", duration: float = 0.5,
+    steps: int = 1, mode: str = "pyautogui", modifiers: str | list[str] | None = None,
+    window: str | None = None, exact: bool = False, confirm: bool = False,
+) -> dict[str, Any]:
+    return mod_gui.drag(
+        x1, y1, x2, y2, runtime.get_config(), duration, button, steps,
+        mode=mode, modifiers=modifiers, window=window, exact=exact,
+        confirm=confirm,
+    )
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Scrollt. Positive clicks scrollen nach oben (bzw. rechts bei "
+        "horizontal=True). Optional erst an (x, y) bewegen.\n"
+        "In FL Studio verändern Regler/Slider ihren Wert über dem Mausrad – "
+        "deshalb IMMER x/y angeben, sonst scrollt das falsche Fenster.\n"
+        "modifiers und mode wie bei mouse_drag."
+    ),
+)
+@guard
+def mouse_scroll(
+    clicks: int, x: int | None = None, y: int | None = None, horizontal: bool = False,
+    mode: str = "pyautogui", modifiers: str | list[str] | None = None,
+    window: str | None = None, exact: bool = False, interval: float = 0.0,
+) -> dict[str, Any]:
+    return mod_gui.scroll(
+        clicks, x, y, horizontal, runtime.get_config(), mode=mode,
+        modifiers=modifiers, window=window, exact=exact, interval=interval,
+    )
+
+
+@server.tool(
+    annotations=WRITE,
+    description=(
+        "Modul B: Bedient einen Drehregler/Slider (Knob) an (x, y) – der "
+        "spezialisierte Weg für FL-Studio-Regler, weil drei Bedienweisen "
+        "unterschiedlich sind:\n"
+        "* delta_px>0 = vertikaler Zug nach oben (Wert steigt); negativ = "
+        "abwärts. axis='horizontal' für Fader.\n"
+        "* clicks: Mausrad über dem Regler, positiv = aufwärts. In FL Studio hat "
+        "jede Rastung eine feste Schrittweite – damit ist '5 Klicks nach oben' "
+        "absolut reproduzierbar, ein Drag nicht.\n"
+        "* reset=True: Alt+Linksklick – FL setzt den Regler auf den Defaultwert.\n"
+        "fine=True hält Ctrl (Feinabstimmung), no_snap=True hält Shift (keine "
+        "Rastpunkte). window=<Titel> erzwingt Vordergrund+Fokus.\n"
+        "WICHTIG: Es gibt keine Rückmeldung des Werts. Verifiziere über "
+        "screenshot(region=...) – FL zeigt den Wert im Tooltip/Hint-Bar."
+    ),
+)
+@guard
+def mouse_knob(
+    x: int, y: int, delta_px: int = 0, clicks: int = 0, reset: bool = False,
+    fine: bool = False, no_snap: bool = False, axis: str = "vertical",
+    steps: int = 24, duration: float = 0.35, mode: str = "pyautogui",
+    window: str | None = None, exact: bool = False, confirm: bool = False,
+    settle_ms: int = 350,
+) -> dict[str, Any]:
+    return mod_gui.knob(
+        x, y, runtime.get_config(), delta_px=delta_px, clicks=clicks,
+        reset=reset, fine=fine, no_snap=no_snap, axis=axis,  # type: ignore[arg-type]
+        steps=steps, duration=duration, mode=mode, window=window, exact=exact,
+        confirm=confirm, settle_ms=settle_ms,
+    )
 
 
-@server.tool(
-    annotations=WRITE,
-    description=(
-        "Modul B: Zieht von (x1, y1) nach (x2, y2) – für Drag & Drop. "
-        "steps>1 fährt in Zwischenpunkten (für Slider, die Sprünge ignorieren)."
-    ),
-)
-@guard
-def mouse_drag(
-    x1: int, y1: int, x2: int, y2: int, button: str = "left", duration: float = 0.5,
-    steps: int = 1,
-) -> dict[str, Any]:
-    return mod_gui.drag(x1, y1, x2, y2, runtime.get_config(), duration, button, steps)
-
-
-@server.tool(
-    annotations=WRITE,
-    description=(
-        "Modul B: Scrollt. Positive clicks scrollen nach oben (bzw. rechts bei "
-        "horizontal=True). Optional erst an (x, y) bewegen."
-    ),
-)
-@guard
-def mouse_scroll(
-    clicks: int, x: int | None = None, y: int | None = None, horizontal: bool = False
-) -> dict[str, Any]:
-    return mod_gui.scroll(clicks, x, y, horizontal, runtime.get_config())
-
-
-@server.tool(
-    annotations=READ_ONLY,
-    description=(
-        "Modul B: Bildschirmauflösung, Mausposition und Bildschirm-Hauptauflösung "
-        "für Multi-Monitor-Setups."
-    ),
-)
-@guard
-def screen_info() -> dict[str, Any]:
-    return {**mod_gui.screen_size(), "mouse": mod_gui.mouse_position()}
+@server.tool(
+    annotations=READ_ONLY,
+    description=(
+        "Modul B: Bildschirmgeometrie und Mausposition. 'width'/'height' sind die "
+        "Masse des virtuellen Desktops, 'x'/'y' dessen Ursprung. Bei mehreren "
+        "Monitoren ist x oft negativ (Monitor links) – alle Koordinaten dieses "
+        "Servers sind Desktop-Koordinaten und dürfen negativ sein. "
+        "multi_monitor=true heißt: es gibt mehr als einen Bildschirm."
+    ),
+)
+@guard
+def screen_info() -> dict[str, Any]:
+    return {**mod_gui.screen_size(), "mouse": mod_gui.mouse_position()}
 
 
 # ===========================================================================

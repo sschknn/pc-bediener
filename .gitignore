@@ -49,3 +49,11 @@ config.local.json
 .idea/
 .DS_Store
 Thumbs.db
+
+--- Grosse generierte Audio-Artefakte (nicht ins Repo) ---
+hardtekk/vocalstems/
+hardtekk/blocklicht_*.wav
+
+--- Fremd-Binary / fremdes Referenz-Repo ---
+tesseract.exe
+flstudio-bridge-repo/

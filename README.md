@@ -8,7 +8,7 @@ Meldung zurück, den sie selbst korrigieren kann.
 | Modul | Inhalt | Werkzeuge |
 |---|---|---|
 | **A** – Code-Ausführung | Python, PowerShell, Shell → stdout/stderr/Exit-Code | `exec_python`, `exec_powershell`, `exec_command` |
-| **B** – GUI & Prozesse | Maus, Tastatur, Fenster, Prozesse | 16 Tools (`mouse_*`, `keyboard_*`, `window_*`, `process_*`) |
+| **B** – GUI & Prozesse | Maus (inkl. Drehregler), Tastatur, Fenster, Prozesse | 19 Tools (`mouse_*`, `keyboard_*`, `window_*`, `process_*`) |
 | **C** – Vision & Status | Screenshots, Bildsuche, CPU/RAM/Disk | `screenshot`, `screen_find_image`, `system_status`, … |
 | **D** – Dateisystem | Lesen, Schreiben, Suchen, Verschieben, Löschen | 10 Tools (`file_*`) |
 
@@ -186,7 +186,7 @@ selbst enthalten keine eigenen Prüfungen.
 ```
 
 ```
-152 passed
+213 passed, 1 skipped
 ```
 
 Abgedeckt sind Konfiguration, Sperrliste, Pfadgrenzen, alle vier Module,
@@ -206,11 +206,41 @@ Zwei Regressionstests sind besonders lehrreich:
   mit einer rohen `EnumWindows`-Zählung, damit ein verschluckter Fehler nicht
   als „es gibt keine Fenster" durchgeht.
 
+### Maussteuerung live prüfen
+
+Unit-Tests mit einer Attrappe beweisen nur, dass die Aufrufe *gemacht*
+werden – nicht, dass Windows sie auch *zustellt*. Genau daran scheitert
+GUI-Automation. Deshalb gibt es zusätzlich einen Prüfstand gegen echtes
+Fenster:
+
+```powershell
+.\.venv\Scripts\python.exe tools\verify_mouse.py
+```
+
+Er startet ein Tk-Fenster, das jeden Maus-Input protokolliert (Positionen,
+Tastendrücke, Modifier-Zustand, Mausrad), positioniert es bewusst auf dem
+**linken** Monitor (`x < 0`) und fährt es mit `sendinput_move/click/drag/scroll`
+an. Geprüft werden u. a.:
+
+- pixelgenaues Landen auf negativen Koordinaten,
+- 24 Einzelimpulse für einen 24-Schritt-Drag statt eines Sprungs,
+- exakter Gesamtweg (kein ±1-px-Rundungsfehler),
+- `Ctrl` bleibt während des Drags gedrückt und ist danach wieder frei,
+- Mausrad-Vorzeichen, `Alt`+Klick, `Ctrl`+`Shift` gleichzeitig, `hold_ms`.
+
+Dieser Prüfstand hat zwei echte Fehler gefunden, die kein Attrappen-Test
+gesehen hätte: die 1-px-Abweichung absoluter SendInput-Koordinaten (Windows
+rundet pro Monitor) und die stillschweigend ignorierte `hold_ms` im
+SendInput-Klick-Modus.
+
 ## Hinweise
 
 - Der Server arbeitet in der Benutzersitzung, in der er gestartet wurde.
   Fenster anderer Sitzungen sind nicht sichtbar.
 - Der Maus-Fail-Safe von `pyautogui` bleibt aktiv (Maus in die obere linke
   Ecke = Abbruch).
+- Koordinaten sind **Desktop**-Koordinaten. Bei mehreren Monitoren können sie
+  negativ sein; `screen_info()` liefert den Ursprung und die Gesamtgrösse des
+  virtuellen Desktops.
 - `mcp` 2.x wird vorausgesetzt (`mcp.server.mcpserver.MCPServer`). In 1.x hieß
   die Klasse `FastMCP`.

@@ -38,6 +38,38 @@ def screenshot_dir(cfg: Config) -> Path:
     return base
 
 
+def _grab(region: tuple[int, int, int, int] | None):
+    """Nimmt einen Bildschirm-Bereich auf – Multi-Monitor-tauglich.
+
+    ``pyautogui.screenshot`` kann per ``PIL.ImageGrab`` nur den primären
+    Monitor und verträgt keine negativen Koordinaten. Auf einem Setup mit
+    einem Monitor links vom Hauptmonitor liegt der Interessante aber genau
+    dort (``x < 0``) – der Aufruf lieferte schlicht ein leeres/verschobenes
+    Bild. Deshalb zuerst ``ImageGrab.grab(all_screens=True)``, das den
+    kompletten virtuellen Desktop inkl. negativem Ursprung erfasst.
+    """
+    box = tuple(region) if region else None
+    try:
+        from PIL import ImageGrab
+
+        kwargs: dict[str, object] = {"all_screens": True}
+        if box:
+            kwargs["bbox"] = (box[0], box[1], box[0] + box[2], box[1] + box[3])
+        return ImageGrab.grab(**kwargs), "imagegrab"
+    except Exception:
+        pass
+    try:
+        import pyautogui
+    except Exception as exc:  # pragma: no cover - plattformabhängig
+        raise RuntimeError("pyautogui fehlt – pip install pyautogui") from exc
+    if box and box[0] < 0:
+        raise ValueError(
+            f"region {box} beginnt bei negativem x – dafür wird Pillows "
+            "ImageGrab (all_screens=True) benötigt. Bitte Pillow aktualisieren."
+        )
+    return pyautogui.screenshot(region=box), "pyautogui"
+
+
 def screenshot(
     cfg: Config,
     path: str | Path | None = None,
@@ -49,17 +81,13 @@ def screenshot(
 
     Args:
         region: ``(links, oben, breite, hoehe)`` – Standard ist der ganze Bildschirm.
+            Negative ``links``/``oben`` sind erlaubt (Monitor links/oben).
         path: Zielpfad; Standard ist ein Zeitstempel im Screenshot-Ordner.
         max_width: Skaliert das Bild auf diese Breite (0 = Original). Spart
             Token, wenn die KI nur ein Layout grob erkennen muss.
     """
-    try:
-        import pyautogui
-    except Exception as exc:  # pragma: no cover - plattformabhängig
-        raise RuntimeError("pyautogui fehlt – pip install pyautogui") from exc
-
     box = region or cfg.screenshot_max_region
-    image = pyautogui.screenshot(region=box)
+    image, method = _grab(box)
 
     if max_width and image.width > max_width:
         ratio = max_width / image.width
@@ -81,6 +109,7 @@ def screenshot(
     return {
         **(info.to_dict() if info else {}),
         "region": list(box) if box else None,
+        "method": method,
         "screen": {"width": image.width, "height": image.height},
     }
 
@@ -153,7 +182,12 @@ def find_on_screen(cfg: Config, needle: str, region: tuple[int, int, int, int] |
 
     Args:
         needle: Pfad zu einem Bild (z.B. der Screenshot eines Buttons).
-        tolerance: Farbabweichung 0-255; höher bedeutet großzügiger.
+        region: ``(links, oben, breite, hoehe)`` – Suchfeld. Ohne diese Angabe
+            durchsuchte pyautogui bisher den **ganzen** Bildschirm und ignorierte
+            ``region`` stillschweigend; jetzt wird das Feld wirklich
+            durchgereicht.
+        tolerance: Farbabweichung 0-255; höher bedeutet großzügiger. Wird auf
+            opencvs ``confidence`` abgebildet (0.0 = exakt, 1.0 = egal).
     """
     try:
         import pyautogui
@@ -165,25 +199,53 @@ def find_on_screen(cfg: Config, needle: str, region: tuple[int, int, int, int] |
         raise FileNotFoundError(f"Suchbild nicht gefunden: {source}")
 
     box = region or cfg.screenshot_max_region
-    try:
-        location = pyautogui.locateCenterOnScreen(str(source), confidence=0.9, grayscale=True)
-    except Exception:
-        # Ohne opencv gibt es kein `confidence` – dann eben exakt vergleichen.
-        location = pyautogui.locateCenterOnScreen(str(source), grayscale=True)
+    # Suchfeld für pyautogui: es will (links, oben, breite, hoehe) mit
+    # positiven Koordinaten. Negative Werte (Monitor links) kann es nicht –
+    # dann wird ohne Einschränkung gesucht und das Ergebnis nur akzeptiert,
+    # wenn es innerhalb des virtuellen Desktops liegt.
+    search_region = list(box) if box else None
+    if search_region and search_region[0] < 0:
+        search_region = None
+
+    confidence = max(0.0, min(1.0, 1.0 - (max(0, min(255, tolerance)) / 255.0)))
+    attempts: list[dict[str, Any]] = []
+    location = None
+
+    def _try(**kwargs: Any) -> Any:
+        try:
+            return pyautogui.locateCenterOnScreen(str(source), **kwargs)
+        except TypeError:
+            # Ohne opencv gibt es kein `confidence` – dann eben exakt vergleichen.
+            kwargs.pop("confidence", None)
+            return pyautogui.locateCenterOnScreen(str(source), **kwargs)
+
+    for label, kwargs in (
+        ("gray+confidence", {"confidence": confidence, "grayscale": True,
+                             "region": search_region}),
+        ("gray", {"grayscale": True, "region": search_region}),
+        ("color", {"grayscale": False, "region": search_region}),
+    ):
+        location = _try(**kwargs)
+        attempts.append({"mode": label, "hit": location is not None})
+        if location is not None:
+            break
 
     if location is None:
-        # Ein zweiter, toleranterer Versuch ohne Graustufen.
-        location = pyautogui.locateCenterOnScreen(str(source), grayscale=False)
+        return {"found": False, "needle": str(source),
+                "region": list(box) if box else None,
+                "confidence": round(confidence, 3), "attempts": attempts}
 
-    if location is None:
-        return {"found": False, "needle": str(source), "region": list(box) if box else None}
+    x, y = int(location[0]), int(location[1])
     return {
         "found": True,
         "needle": str(source),
-        "x": int(location[0]),
-        "y": int(location[1]),
-        "center": [int(location[0]), int(location[1])],
+        "x": x,
+        "y": y,
+        "center": [x, y],
         "tolerance": tolerance,
+        "confidence": round(confidence, 3),
+        "region": list(box) if box else None,
+        "matched_by": next(a["mode"] for a in attempts if a["hit"]),
     }
 
 

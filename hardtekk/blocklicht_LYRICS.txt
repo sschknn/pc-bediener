@@ -1,0 +1,58 @@
+BLOCKLICHT - Hardtekk
+==============================================
+Tempo: 150 BPM | Takt: 4/4 | Tonart: F#-Moll
+Laenge: 72 Takte = 115.2 s
+16tel-Raster: 100.0 ms
+
+Sections
+  Takt  1- 8  intro   (Energie 0.35)
+  Takt  9-16  verse1  (Energie 0.55)
+  Takt 17-20  build1  (Energie 0.75)
+  Takt 21-28  drop1   (Energie 1.00)
+  Takt 29-36  verse2  (Energie 0.55)
+  Takt 37-40  build2  (Energie 0.75)
+  Takt 41-48  drop2   (Energie 1.00)
+  Takt 49-56  verse3  (Energie 0.55)
+  Takt 57-60  build3  (Energie 0.85)
+  Takt 61-72  final   (Energie 1.00)
+
+Deutsche Rap-Vocals (edge-tts, Conrad/Killian/Jonas)
+----------------------------------------------
+  Takt  9  [rap  ] DE-Conrad  3.11s / 3.20s  Blocklicht an, die Wand zittert, die Box haemmert weiter
+  Takt 11  [rap  ] DE-Conrad  3.11s / 3.20s  Kein Nachbar schlaeft, mein Bass frisst die halbe Haeuserzeile
+  Takt 13  [rap  ] DE-Conrad  3.11s / 3.20s  Jacke zu, die Anlage laeuft, mein Herz ist der Bass
+  Takt 15  [rap  ] DE-Conrad  3.11s / 3.20s  Beton tanzt, das Flackern stirbt, wir drehen auf wie Kerzen
+  Takt 21  [hook ] DE-Conrad  3.11s / 3.20s  HARTEK bis die Sonne kracht, wir bauen auf die Nacht
+  Takt 23  [hook ] DE-Conrad  3.11s / 3.20s  Kein Zurueck, kein Zoegern, die Wand faellt krach
+  Takt 25  [hook ] DE-Conrad  3.11s / 3.20s  HARTEK, HARTEK, die Maschine schlaegt
+  Takt 27  [hook ] DE-Conrad  3.11s / 3.20s  Bis das letzte Lichterl sich nicht mehr bewegt
+  Takt 29  [rap  ] DE-Conrad  3.11s / 3.20s  Zwischen Hochhaus und Hinterhof tickt der Bass im Takt
+  Takt 31  [rap  ] DE-Conrad  3.11s / 3.20s  Jeder Fensterplatz ein Schrein, mein Echo waechst und waechst
+  Takt 33  [rap  ] DE-Conrad  3.11s / 3.20s  Du kannst lachen oder verstummen, wir sind nicht zurueck
+  Takt 35  [rap  ] DE-Conrad  3.11s / 3.20s  Bis zum letzten Funken kommt die Nacht zu mir
+  Takt 41  [hook ] DE-Conrad  3.11s / 3.20s  HARTEK bis die Sonne kracht, wir bauen auf die Nacht
+  Takt 43  [hook ] DE-Conrad  3.11s / 3.20s  Kein Zurueck, kein Zoegern, die Wand faellt krach
+  Takt 45  [hook ] DE-Conrad  3.11s / 3.20s  HARTEK, HARTEK, die Maschine schlaegt
+  Takt 47  [hook ] DE-Conrad  3.11s / 3.20s  Bis das letzte Lichterl sich nicht mehr bewegt
+  Takt 49  [rap  ] DE-Killian  3.11s / 3.20s  Kalt und nass die Fassade, aber die Boxen heizen ein
+  Takt 51  [rap  ] DE-Killian  3.11s / 3.20s  Sechzehn Takte Blindflug, dann explodiert der Schein
+  Takt 53  [rap  ] DE-Killian  3.11s / 3.20s  Ich dreh die Anlage hoch, bis die Waende singen lernt
+  Takt 55  [rap  ] DE-Killian  3.11s / 3.20s  Alles was wir waren, hoert die Nacht sich selbst verbrennen
+  Takt 61  [hook ] DE-Conrad  3.11s / 3.20s  HARTEK bis die Sonne kracht, wir bauen auf die Nacht
+  Takt 63  [hook ] DE-Conrad  3.11s / 3.20s  Kein Zurueck, kein Zoegern, die Wand faellt krach
+  Takt 65  [hook ] DE-Conrad  3.11s / 3.20s  HARTEK, HARTEK, die Maschine schlaegt
+  Takt 67  [hook ] DE-Conrad  3.11s / 3.20s  Bis das letzte Lichterl sich nicht mehr bewegt
+  Takt 69  [hook ] DE-Conrad  3.11s / 3.20s  HARTEK, HARTEK, bis der Block mich traegt
+  Takt 71  [hook ] DE-Conrad  3.11s / 3.20s  HARTEK, HARTEK, die Maschine schlaegt
+  Takt 22  [adlib] AT-Jonas  1.51s / 1.60s  HARTEK!
+  Takt 26  [adlib] AT-Jonas  1.51s / 1.60s  Haert!
+  Takt 28  [adlib] AT-Jonas  1.51s / 1.60s  Hoerst du?
+  Takt 44  [adlib] AT-Jonas  1.51s / 1.60s  HARTEK!
+  Takt 46  [adlib] AT-Jonas  1.51s / 1.60s  Weiter!
+  Takt 48  [adlib] AT-Jonas  1.51s / 1.60s  Hoerst du?
+  Takt 70  [adlib] AT-Jonas  1.51s / 1.60s  HARTEK!
+  Takt 71  [adlib] AT-Jonas  1.51s / 1.60s  Ja!
+  Takt 72  [adlib] DE-Killian  1.51s / 1.60s  HARTEK!
+
+BPM -> FL: FILE > Import > MIDI, Datei waehlen, 'Start new project'.
+Dann Stems per Browser-Drag in die Playlist legen (4 Spuren).

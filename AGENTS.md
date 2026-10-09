@@ -44,16 +44,20 @@ engerer Filter oder eine tiefere Suche.
 
 | Tool | Zweck |
 |---|---|
-| `screen_info()` | Auflösung + Mausposition |
-| `mouse_move(x, y, duration)` | Maus absolut bewegen |
-| `mouse_click(x, y, button, clicks, confirm)` | Klick (button: left/right/middle). `window` holt das Ziel vorher in den Fokus. `mode="sendinput"` nutzt SendInput auf Hardware-Ebene (PyDirectInput-Art), wenn Klicks ignoriert werden. `hold_ms` hält gedrückt (für Slider/Regler). |
-| `mouse_drag(x1, y1, x2, y2, button, duration)` | Drag & Drop. `steps>1` fährt in Zwischenpunkten (für Slider, die Sprünge ignorieren). |
-| `mouse_scroll(clicks, x, y, horizontal)` | Scrollen |
+| `screen_info()` | Auflösung + Mausposition + **virtueller Desktop** (x/y/width/height, `multi_monitor`) |
+| `mouse_move(x, y, duration)` | Maus absolut bewegen (negative x/y = Monitor links/oben) |
+| `mouse_click(x, y, button, clicks, confirm, modifiers)` | Klick (button: left/right/middle). `window` holt das Ziel vorher in den Fokus. `mode="sendinput"` nutzt SendInput auf Hardware-Ebene (PyDirectInput-Art), wenn Klicks ignoriert werden. `hold_ms` hält gedrückt (für Slider/Regler). `modifiers` hält Zusatztasten (`"alt"` bewirkt in FL Studio den Reset auf den Defaultwert). |
+| `mouse_drag(x1, y1, x2, y2, button, duration, steps, mode, modifiers, window)` | Drag & Drop. `steps>1` fährt in Zwischenpunkten (für Slider, die Sprünge ignorieren); `mode="sendinput"` sendet die Strecke als Serie relativer Einzelimpulse auf Hardware-Ebene. |
+| `mouse_knob(x, y, delta_px, clicks, reset, fine, no_snap, axis)` | **Drehregler/Slider** – siehe Abschnitt „Drehregler" unten. |
+| `mouse_scroll(clicks, x, y, horizontal, mode, modifiers, window)` | Scrollen. `x`/`y` positioniert den Cursor – nötig, weil Regler nur unter dem Cursor reagieren. |
 | `keyboard_type(text, use_clipboard, interval)` | Text tippen |
 | `keyboard_press(key, presses)` | Taste: `enter`, `esc`, `f5`, `tab`, `space`, `printscreen` … |
 | `keyboard_hotkey(keys)` | Hotkey: `["ctrl","c"]`, `["alt","tab"]` |
 | `window_list(filter_text)` | Fenster mit Titel/Position/Größe auflisten → `{count, windows}` |
 | `window_focus(title, exact)` | Fenster aktivieren (auch aus minimiert) |
+| `window_activate(title, exact)` | Vordergrund **und** Tastatur-Fokus erzwingen (`AttachThreadInput`) |
+| `window_health(title)` | Reagiert das Fenster noch? — erkennt hängende Programme und veraltete Handles |
+| `window_modal_state(title)` | Blockiert ein modaler Dialog das Fenster? Liefert den Blockierer |
 | `window_action(title, action, confirm)` | `minimize`, `maximize`, `restore`, `hide`, `close` |
 | `process_list(filter_text, limit, sort_by)` | Prozesse mit CPU/RAM → `{count, processes}` |
 | `process_info(pid)` | Details zu einem Prozess |
@@ -61,12 +65,76 @@ engerer Filter oder eine tiefere Suche.
 | `process_kill(pid, force, confirm)` | Prozess beenden |
 | `sleep(seconds)` | Warten (max. 60 s) |
 
+### Maus zuverlässig steuern — die fünf Regeln
+
+Diese Regeln sind nicht theoretisch, sondern aus Fehlschlägen abgeleitet;
+`tools/verify_mouse.py` fährt sie live gegen ein echtes Fenster nach.
+
+1. **Immer `window="<Titel>"` angeben.** Das löst das Handle frisch auf
+   (FL Studio bekommt binnen Minuten neue) und erzwingt Vordergrund plus
+   Tastatur-Fokus. Panel-Fenster — Mixer, geöffnete Plugins — verwerfen
+   Klicks ohne Eingabefokus lautlos: kein Fehler, einfach nichts passiert.
+2. **Negative Koordinaten sind gültig.** Auf einem Setup mit Monitor links vom
+   Hauptmonitor beginnt der virtuelle Desktop bei `x = -1920`. `screen_info()`
+   liefert `x`/`y`/`width`/`height` des virtuellen Desktops; gegen die primäre
+   Auflösung zu rechnen macht jedes Fenster auf dem zweiten Monitor unerreichbar.
+3. **`mode="sendinput"` als Eskalation.** pyautogui nutzt das veraltete
+   `mouse_event()`; manche Programme (DirectX, Spiele) sehen das nie.
+   SendInput kommt auf Hardware-Ebene an. Der Rückgabewert verrät, ob Windows
+   das Event angenommen hat — ein blockierter Klick wird als Fehler gemeldet
+   statt still zu scheitern.
+4. **`steps` ist kein Kosmetikum.** Ein Drag mit `steps=1` ist für das Ziel ein
+   Sprung von A nach B. Regler werten nur die *Zwischenbewegung* aus. Der
+   SendInput-Pfad zerlegt die Strecke in relative Einzelimpulse, deren Summe
+   exakt die Zielstrecke ergibt (`divmod`-Verteilung, kein ±1-px-Fehler).
+5. **Selbstkorrektur nach dem Absolutsprung.** Windows bildet
+   `MOUSEEVENTF_ABSOLUTE` pro Monitor ab; gemessen kamen absolute Koordinaten
+   regelmäßig 1 px daneben an (mal links, mal rechts). `sendinput_move`
+   misst deshalb mit `GetCursorPos` nach und korrigiert den Restfehler mit
+   einem relativen Impuls. `residual_px == 0` heißt: pixelgenau gelandet.
+
+### Drehregler (Knobs & Slider)
+
+`mouse_knob(x, y, …)` kapselt die drei Bedienarten, die FL Studio (und die
+meisten Editoren) kennen. Belege: Image-Line-Handbuch, Abschnitt
+„Knobs & sliders"; die Fakten stehen auch in `flstudio_info()`.
+
+| Parameter | Wirkung | FL Studio |
+|---|---|---|
+| `delta_px > 0` | vertikaler Zug **nach oben** (Wert steigt) | Standardbedienung |
+| `delta_px < 0` | Zug nach unten | Standardbedienung |
+| `axis="horizontal"` | Zug nach rechts statt oben | waagerechte Fader |
+| `clicks=5` | 5 Mausrad-Rastungen über dem Regler | feste Schrittweite, **reproduzierbar** |
+| `reset=True` | Alt + Linksklick | **Reset auf den Defaultwert** |
+| `fine=True` | Ctrl + Zug | Feinabstimmung |
+| `no_snap=True` | Shift + Zug | Rastpunkte (Default u. a.) aussetzen |
+| `window="FL Studio"` | Vordergrund + Fokus | Pflicht bei Panel-Fenstern |
+
+**Reihenfolge der Verlässlichkeit:** `reset=True` > `clicks` > `delta_px`.
+Ein Drag über N Pixel ist nie exakt — FL rundet und rastet ein; ein Reset
+und eine Rad-Rastung sind es dagegen immer.
+
+**Modifikatoren sind Pflicht, nicht Kosmetik.** Ohne `modifiers` war keine
+dieser Varianten überhaupt bedienbar: ein Regler ließ sich nur ungenau
+verschieben, nie auf einen bekannten Wert setzen oder zurücksetzen.
+
+**Werte kann man nicht auslesen.** Kein Rückgabewert enthält den
+Reglerstand. Deshalb Soll-Ist-Schleife: Zielwert merken → ändern → Cursor auf
+den Regler → `screenshot(region=…)` → Wert im Tooltip bzw. der Hint-Bar
+lesen → bei Abweichung mit kleinerem `delta_px` nachfassen.
+
+**Grenze der API.** FL Studios Python-API kann Tempo, Pattern-Länge, Kanäle
+und Spurnamen — aber **keine** Plugin-Parameter (`plugins.setParamValue`
+existiert nicht). Für Regler ist die Maus der einzige Weg; die Alternative
+„Rechtsklick → *Type in value* → Wert tippen" ist exakter, blockiert aber das
+Hauptfenster, bis der Dialog geschlossen wird.
+
 ### Modul C — Vision & Systemstatus
 
 | Tool | Zweck |
 |---|---|
-| `screenshot(region, path, save, max_width)` | Screenshot als Bild zurück |
-| `screen_find_image(image_path, region)` | Bild auf dem Screen finden → Position |
+| `screenshot(region, path, save, max_width)` | Screenshot als Bild zurück. `region` darf negative x/y haben (Monitor links) |
+| `screen_find_image(image_path, region)` | Bild auf dem Screen finden → Position. `region` wird wirklich durchgereicht; `tolerance` ist die Farbtoleranz |
 | `screen_wait_for_image(image_path, timeout_s, poll_interval)` | Warten, bis Bild erscheint |
 | `system_status(include_disk, disk_path)` | CPU pro Kern, RAM, Disk, Akku, Uptime |
 
@@ -124,9 +192,9 @@ engerer Filter oder eine tiefere Suche.
 1. **Bestätigungspflicht.** Solange `safety_mode = "confirm"` gilt, brauchen
    alle destruktiven Tools ein explizites `confirm=True`:
    `exec_*`, `file_write` (Überschreiben), `file_move`, `file_delete`,
-   `process_start`, `process_kill`, `mouse_click`, `window_action` mit
-   `action="close"`. Ohne dieses Flag lehnt der Server die Aktion mit
-   `ConfirmationRequired` ab — setze es also nicht reflexartig.
+   `process_start`, `process_kill`, `mouse_click`, `mouse_drag`,
+   `window_action` mit `action="close"`. Ohne dieses Flag lehnt der Server die
+   Aktion mit `ConfirmationRequired` ab — setze es also nicht reflexartig.
 
 2. **Erkläre vorher.** Bevor du `confirm=True` setzt, beschreibe in einem
    kurzen Satz, was die Aktion bewirkt (z. B. „Lösche `C:\Users\...\alt.txt`

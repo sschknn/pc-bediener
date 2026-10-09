@@ -55,7 +55,7 @@ class TestMouse:
             mod_gui.click(1, 1, cfg, clicks=99, confirm=True)
 
     def test_drag(self, cfg: Config, fake_gui):
-        result = mod_gui.drag(10, 20, 300, 400, cfg)
+        result = mod_gui.drag(10, 20, 300, 400, cfg, confirm=True)
         assert result["from"] == {"x": 10, "y": 20}
         assert result["to"] == {"x": 300, "y": 400}
         names = fake_gui.names()
@@ -68,8 +68,26 @@ class TestMouse:
         assert fake_gui.calls[-1] == ("hscroll", (3,), {})
 
     def test_screen_size_and_position(self, fake_gui):
-        assert mod_gui.screen_size() == {"width": 1920, "height": 1080}
+        size = mod_gui.screen_size()
+        # width/height sind der virtuelle Desktop, primary_* der Hauptmonitor.
+        assert size["width"] == 1920 and size["height"] == 1080
+        assert size["primary_width"] == 1920 and size["primary_height"] == 1080
+        assert size["x"] == 0 and size["y"] == 0
+        assert size["multi_monitor"] is False
         assert mod_gui.mouse_position() == {"x": 100, "y": 200}
+
+    def test_multimonitor_rechteck(self, cfg: Config, fake_gui, monkeypatch):
+        """Monitor links vom Hauptmonitor -> negativer Ursprung, x darf negativ."""
+        monkeypatch.setattr(mod_gui, "virtual_metrics",
+                            lambda: (-1920, 0, 3840, 1297))
+        size = mod_gui.screen_size()
+        assert size["x"] == -1920 and size["width"] == 3840
+        assert size["multi_monitor"] is True
+
+        mod_gui.move_mouse(-959, 581, cfg)          # Monitor links: erlaubt
+        assert mod_gui.mouse_position() == {"x": -959, "y": 581}
+        with pytest.raises(ValueError, match="virtuellen Desktops"):
+            mod_gui.move_mouse(-1921, 0, cfg)       # eine Spalte zu weit links
 
 
 class TestKeyboard:
@@ -416,6 +434,38 @@ class TestVision:
         needle.write_bytes(b"\x89PNG\r\n")
         fake_gui.locate_result = None
         assert mod_vision.find_on_screen(cfg, needle)["found"] is False
+
+    def test_find_image_region_wird_echt_durchgereicht(self, cfg: Config,
+                                                     fake_gui,
+                                                     workspace: Path):
+        """``region`` wurde frueher berechnet und dann stillschweigend verworfen.
+
+        Wer in FL-Studio einen Regler im eingedockten Panel suchte, durchsuchte
+        damit den *ganzen* Bildschirm und klickte womöglich auf das identische
+        Bild im Plugin-Fenster an anderer Stelle.
+        """
+        needle = workspace / "knopf.png"
+        needle.write_bytes(b"\x89PNG\r\n")
+        fake_gui.locate_result = (640, 480)
+        mod_vision.find_on_screen(cfg, needle, region=(100, 200, 300, 300))
+        locate = [c for c in fake_gui.calls if c[0] == "locate"]
+        assert locate
+        # Die Attrappe schluckt **kwargs nicht – sie protokolliert nur zwei
+        # Felder. Also ueber die Aufruf-Attrappe pruefen.
+        assert fake_gui.locate_region == [100, 200, 300, 300]
+
+    def test_find_image_tolerance_wird_zu_confidence(self, cfg: Config,
+                                                     fake_gui,
+                                                     workspace: Path):
+        needle = workspace / "knopf.png"
+        needle.write_bytes(b"\x89PNG\r\n")
+        fake_gui.locate_result = (5, 6)
+        # tolerance 0 = exakt vergleichen (confidence 1.0)
+        strict = mod_vision.find_on_screen(cfg, needle, tolerance=0)
+        # tolerance 255 = sehr grosszuegig (confidence ~0.0)
+        loose = mod_vision.find_on_screen(cfg, needle, tolerance=255)
+        assert strict["confidence"] == 1.0
+        assert loose["confidence"] == 0.0
 
     def test_wait_for_image_times_out(self, cfg: Config, fake_gui, workspace: Path):
         needle = workspace / "knopf.png"
